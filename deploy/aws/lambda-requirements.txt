@@ -1,0 +1,2 @@
+# Packaged into the Lambda zip by deploy/aws/build_lambda.sh (boto3 is in the runtime).
+anthropic==2.11.0

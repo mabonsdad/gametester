@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Card Game Test Bench</title>
+  <meta name="description" content="Design, set up and playtest prototype card games with human and AI players.">
+  <script>
+    // Relative asset paths need a trailing slash when hosted in a subfolder
+    // (e.g. /experiments/gametester -> /experiments/gametester/).
+    if (!/\/$|\.html?$/.test(location.pathname)) location.replace(location.pathname + '/' + location.search + location.hash);
+  </script>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header id="header" class="app-header"></header>
+  <main id="app"><div class="empty"><p>Loading…</p></div></main>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
