@@ -32,6 +32,17 @@ Static hosting also works: serve the `static/` folder with any web server.
 Without `server.py`, projects are saved in the browser, and AI seats can use
 only the random bot or copy/paste prompts.
 
+Set `APP_PASSWORD` (and optionally `API_TOKEN`) to require a login.
+
+## Live site
+
+https://shwsh.co.uk/experiments/gametester/ runs on AWS: static files on S3,
+the API on Lambda, data in a private S3 bucket, all behind CloudFront.
+Every push to `main` is tested and deployed by GitHub Actions
+(`.github/workflows/deploy.yml`). Details: [deploy/aws/SETUP.md](deploy/aws/SETUP.md).
+
+Tests: `python3 -m unittest discover -s tests`
+
 ## AI players
 
 Pick a controller for each seat when you start a game:
@@ -40,7 +51,7 @@ Pick a controller for each seat when you start a game:
 |---|---|
 | Random bot | none. Smoke-tests setup and turn flow; it does not follow the rules |
 | Copy/paste prompt | none. Paste the prompt into any chatbot and paste the JSON reply back |
-| Claude in chat (bridge) | Server running. When the seat's turn comes, ask Claude Code in your chat: *"take the pending AI turn"* (it uses `tools/ai_bridge.py`) |
+| Claude in chat (bridge) | Server running (local or hosted). When the seat's turn comes, ask Claude Code in your chat: *"take the pending AI turn"* (it uses `tools/ai_bridge.py`) |
 | Claude API | `pip install anthropic` and `export ANTHROPIC_API_KEY=...`. Optional: `CLAUDE_MODEL` (default `claude-opus-5-5`), `CLAUDE_EFFORT` (default `medium`) |
 | OpenAI API | `export OPENAI_API_KEY=... OPENAI_MODEL=...` |
 
@@ -59,10 +70,15 @@ python3 tools/ai_bridge.py answer next reply.json
 ## Layout
 
 ```
-server.py            web server + JSON API (stdlib)
-backend/storage.py   projects, images, sessions, AI queue (JSON files)
-backend/ai.py        Claude / OpenAI relay
-tools/ai_bridge.py   CLI to answer queued AI turns
+server.py            local web server (stdlib): static files + API
+lambda_function.py   AWS Lambda entry point for the same API
+backend/app.py       the JSON API (routes, login, AI jobs)
+backend/storage.py   projects, images, sessions, AI jobs
+backend/store.py     file or S3 storage
+backend/ai.py        Claude / OpenAI calls
+tools/ai_bridge.py   CLI to answer "Claude in chat" AI turns (local or hosted)
+deploy/aws/          CloudFormation template, Lambda build, CloudFront routes
+tests/               backend tests
 static/              the app (vanilla JS modules, no build step)
   js/engine.js       table state, actions, log, seeded RNG
   js/ai.js           prompts, response parsing, AI controllers
