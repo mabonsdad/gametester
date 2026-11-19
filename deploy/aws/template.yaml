@@ -28,6 +28,12 @@ Parameters:
   GitHubBranch:
     Type: String
     Default: main
+  GitHubImmutableRepo:
+    Type: String
+    Default: mabonsdad@28448562/gametester@1463711773
+    Description: >-
+      owner@ownerId/repo@repoId - newer repos use this form in the OIDC "sub"
+      claim (gh api repos/OWNER/REPO/actions/oidc/customization/sub)
   AppPassword:
     Type: String
     NoEcho: true
@@ -167,7 +173,9 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
+                  - !Sub "repo:${GitHubImmutableRepo}:ref:refs/heads/${GitHubBranch}"
       Policies:
         - PolicyName: gametester-deploy
           PolicyDocument:
