@@ -27,8 +27,9 @@ For the live site add `--url https://shwsh.co.uk/experiments/gametester`
 ## Deploying
 
 The live site (shwsh.co.uk/experiments/gametester) deploys from `main` via
-`.github/workflows/deploy.yml`. Work on a branch, open a PR, and the owner
-merges it. AWS infrastructure details are in `deploy/aws/SETUP.md`. Never
+`.github/workflows/deploy.yml`. Work on a branch and open a PR; the owner has
+said Claude may merge its own PRs once the PR's test job passes (merging
+deploys to the live site). AWS infrastructure details are in `deploy/aws/SETUP.md`. Never
 put data under the public site bucket: it is world-readable.
 
 ## Checks
