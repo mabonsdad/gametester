@@ -179,23 +179,24 @@ export async function requestTurn(project, st, ui) {
     case 'ai-manual':
       return { text: await ui.manual(prompt, p), prompt };
     case 'ai-anthropic':
-      ui.waiting?.(`Asking Claude for ${p.name}'s turn…`);
-      return { text: (await api.aiComplete('anthropic', prompt)).text, prompt };
     case 'ai-openai':
-      ui.waiting?.(`Asking OpenAI for ${p.name}'s turn…`);
-      return { text: (await api.aiComplete('openai', prompt)).text, prompt };
     case 'ai-bridge': {
-      const req = await api.bridgeCreate(prompt, { project: project.name, turn: st.turn.number, player: `${p.id} ${p.name}` });
+      const provider = { 'ai-anthropic': 'anthropic', 'ai-openai': 'openai', 'ai-bridge': 'bridge' }[p.controller];
+      const job = await api.jobCreate(provider, prompt, { project: project.name, turn: st.turn.number, player: `${p.id} ${p.name}` });
       const signal = { cancelled: false };
-      ui.waiting?.(`Waiting for Claude in the chat window to play ${p.name} (request ${req.id}). Ask Claude: "take the pending AI turn".`, () => {
+      const message = provider === 'bridge'
+        ? `Waiting for Claude in the chat window to play ${p.name} (request ${job.id}). Ask Claude: "take the pending AI turn".`
+        : `Asking ${provider === 'anthropic' ? 'Claude' : 'OpenAI'} to play ${p.name}'s turn…`;
+      ui.waiting?.(message, () => {
         signal.cancelled = true;
-        api.bridgeCancel(req.id).catch(() => {});
+        api.jobCancel(job.id).catch(() => {});
       });
       for (;;) {
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 1500));
         if (signal.cancelled) throw new Error('Cancelled');
-        const s = await api.bridgeGet(req.id);
+        const s = await api.jobGet(job.id);
         if (s.status === 'answered') return { text: s.response, prompt };
+        if (s.status === 'error') throw new Error(s.error || 'The AI request failed.');
         if (s.status === 'cancelled') throw new Error('Request cancelled');
       }
     }

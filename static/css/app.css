@@ -51,7 +51,7 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monosp
 @media (max-width: 640px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
 
 /* ---------- controls */
-input[type=text], input[type=number], input[type=search], textarea, select {
+input[type=text], input[type=password], input[type=number], input[type=search], textarea, select {
   font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-width: 0;
 }
 textarea { resize: vertical; width: 100%; }
@@ -280,3 +280,7 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; }
   .table-row .seat { flex: 1 1 100%; }
   .table-row { flex-wrap: wrap; }
 }
+
+/* ---------- login */
+.login-box { max-width: 380px; margin: 60px auto; display: flex; flex-direction: column; gap: 12px; }
+.login-box input { width: 100%; }

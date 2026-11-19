@@ -6,8 +6,9 @@ let info = null;
 
 export async function init() {
   try {
-    const r = await fetch('api/health', { cache: 'no-store' });
-    if (r.ok) {
+    const r = await fetch('api/health', { cache: 'no-store', credentials: 'same-origin' });
+    const ctype = r.headers.get('Content-Type') || '';
+    if (r.ok && ctype.includes('json')) {
       info = await r.json();
       if (info.ok) return (mode = 'server');
     }
@@ -17,17 +18,36 @@ export async function init() {
 
 export const getMode = () => mode;
 export const serverInfo = () => info;
+// True when the hosted app is password protected and this browser is not logged in.
+export const needsLogin = () => mode === 'server' && info?.authRequired && !info?.authed;
+export const canLogout = () => mode === 'server' && info?.authRequired && info?.authed;
 
 async function call(method, url, body) {
   const r = await fetch(url, {
     method,
+    credentials: 'same-origin',
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   let data = null;
   try { data = await r.json(); } catch { /* empty */ }
+  if (r.status === 401 && !url.endsWith('api/login')) {
+    if (info) info.authed = false;
+    window.dispatchEvent(new Event('gt-login-required'));
+  }
   if (!r.ok) throw new Error(data?.error || `${method} ${url} failed (${r.status})`);
   return data;
+}
+
+export async function login(password) {
+  await call('POST', 'api/login', { password });
+  await init();
+  return !needsLogin();
+}
+
+export async function logout() {
+  await call('POST', 'api/logout', {});
+  await init();
 }
 
 // ----------------------------------------------------------- localStorage
@@ -116,16 +136,13 @@ export async function deleteSession(pid, sid) {
   LS.set(sIndexKey(pid), LS.get(sIndexKey(pid), []).filter((x) => x !== sid));
 }
 
-// ----------------------------------------------------------- AI
-export async function aiComplete(provider, prompt, options) {
-  if (mode !== 'server') throw new Error('Hosted AI providers need the Python server running.');
-  return call('POST', 'api/ai/complete', { provider, system: prompt.system, user: prompt.user, options });
+// ----------------------------------------------------------- AI jobs
+// provider: 'anthropic' | 'openai' | 'bridge'. The server answers at once
+// with a job id; poll jobGet() until status is answered / error / cancelled.
+export async function jobCreate(provider, prompt, meta) {
+  if (mode !== 'server') throw new Error('Hosted AI seats need the server (python3 server.py, or the AWS deployment).');
+  return call('POST', 'api/ai/jobs', { provider, prompt, meta });
 }
 
-export async function bridgeCreate(prompt, meta) {
-  if (mode !== 'server') throw new Error('The chat bridge needs the Python server running.');
-  return call('POST', 'api/ai/bridge', { prompt, meta });
-}
-
-export const bridgeGet = (id) => call('GET', `api/ai/bridge/${encodeURIComponent(id)}`);
-export const bridgeCancel = (id) => call('DELETE', `api/ai/bridge/${encodeURIComponent(id)}`);
+export const jobGet = (id) => call('GET', `api/ai/jobs/${encodeURIComponent(id)}`);
+export const jobCancel = (id) => call('DELETE', `api/ai/jobs/${encodeURIComponent(id)}`);

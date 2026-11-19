@@ -1,0 +1,83 @@
+name: Deploy
+
+# Every push to main is tested and then deployed to
+# https://shwsh.co.uk/experiments/gametester/
+# AWS access uses GitHub's OIDC login to a role that can only touch this app
+# (see deploy/aws/template.yaml); no AWS keys are stored in GitHub.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-2
+  ROLE_ARN: arn:aws:iam::528323923790:role/GitHubActionsGametesterDeployRole
+  SITE_BUCKET: shwsh.co.uk
+  SITE_PREFIX: experiments/gametester
+  FUNCTION_NAME: gametester-api
+  DISTRIBUTION_ID: E3LS87IBDVMSCO
+  SITE_URL: https://shwsh.co.uk/experiments/gametester
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax checks
+        run: |
+          python -m py_compile server.py lambda_function.py backend/*.py tools/*.py
+          for f in static/js/*.js static/js/views/*.js; do node --check "$f"; done
+      - name: Backend tests
+        run: python -m unittest discover -s tests -v
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Build Lambda package
+        run: bash deploy/aws/build_lambda.sh build/lambda.zip
+      - name: Deploy API (Lambda)
+        run: |
+          aws lambda update-function-code --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://build/lambda.zip --query 'LastUpdateStatus' --output text
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+      - name: Deploy front end (S3)
+        # --delete only removes files under the app's own prefix.
+        run: |
+          aws s3 sync static/ "s3://$SITE_BUCKET/$SITE_PREFIX/" --delete \
+            --exclude ".DS_Store" --cache-control "no-cache,max-age=0,must-revalidate"
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/$SITE_PREFIX" "/$SITE_PREFIX/*" --query 'Invalidation.Id' --output text
+      - name: Smoke test
+        run: |
+          sleep 20
+          curl -fsS "$SITE_URL/api/health" | tee /dev/stderr | grep -q '"ok": true'
+          curl -fsS -o /dev/null "$SITE_URL/"

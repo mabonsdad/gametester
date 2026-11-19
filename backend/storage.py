@@ -1,28 +1,27 @@
-"""File-based storage for projects, images, play sessions and the AI bridge queue.
+"""Projects, images, play sessions and AI jobs, stored as JSON blobs.
 
-Everything lives under DATA_DIR (default: ./data, override with GAMETESTER_DATA):
+Key layout (in ./data locally, or in the S3 data bucket on AWS):
 
-    data/
-      projects/<project_id>/project.json
-      projects/<project_id>/images/<file>
-      projects/<project_id>/sessions/<session_id>.json
-      ai_queue/<request_id>.json
+    projects/<project_id>/project.json
+    projects/<project_id>/images/<file>
+    projects/<project_id>/sessions/<session_id>.json
+    jobs/<job_id>.json
+    trash/<project_id>-<time>/...       (deleted projects, recoverable)
 """
 import base64
 import json
-import os
 import re
 import time
 import uuid
-from pathlib import Path
+from pathlib import PurePosixPath
 
-ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(os.environ.get("GAMETESTER_DATA", ROOT / "data")).resolve()
-PROJECTS = DATA_DIR / "projects"
-QUEUE = DATA_DIR / "ai_queue"
+from . import store as store_mod
+
+store = store_mod.from_env()
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
+EXT_TYPES = {v: k for k, v in IMAGE_TYPES.items()}
 
 
 class StorageError(Exception):
@@ -37,40 +36,42 @@ def check_id(value):
     return value
 
 
-def _read(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _write(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=1, ensure_ascii=False)
-    os.replace(tmp, path)
+def now_ms():
+    return int(time.time() * 1000)
 
 
 def new_id(prefix=""):
     return prefix + uuid.uuid4().hex[:12]
 
 
+def _get(key):
+    raw = store.get(key)
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def _put(key, data):
+    store.put(key, json.dumps(data, indent=1, ensure_ascii=False).encode("utf-8"), "application/json")
+
+
 # ---------------------------------------------------------------- projects
 
 def list_projects():
     out = []
-    if not PROJECTS.exists():
-        return out
-    for d in PROJECTS.iterdir():
-        f = d / "project.json"
-        if not f.exists():
+    for key in store.list("projects/"):
+        parts = key.split("/")
+        if len(parts) != 3 or parts[2] != "project.json":
             continue
-        try:
-            p = _read(f)
-        except (OSError, json.JSONDecodeError):
+        p = _get(key)
+        if not p:
             continue
         out.append({
-            "id": p.get("id", d.name),
-            "name": p.get("name", d.name),
+            "id": p.get("id", parts[1]),
+            "name": p.get("name", parts[1]),
             "description": p.get("description", ""),
             "updated": p.get("updated"),
             "cardCount": len(p.get("cards", [])),
@@ -81,28 +82,29 @@ def list_projects():
 
 
 def get_project(pid):
-    f = PROJECTS / check_id(pid) / "project.json"
-    if not f.exists():
+    p = _get(f"projects/{check_id(pid)}/project.json")
+    if p is None:
         raise StorageError("Project not found", 404)
-    return _read(f)
+    return p
 
 
 def save_project(project):
     pid = check_id(project.get("id") or new_id("p_"))
     project["id"] = pid
-    project["updated"] = int(time.time() * 1000)
-    _write(PROJECTS / pid / "project.json", project)
+    project["updated"] = now_ms()
+    _put(f"projects/{pid}/project.json", project)
     return project
 
 
 def delete_project(pid):
-    d = PROJECTS / check_id(pid)
-    if not d.exists():
+    prefix = f"projects/{check_id(pid)}/"
+    keys = store.list(prefix)
+    if not keys:
         raise StorageError("Project not found", 404)
-    # Move aside rather than hard delete, so mistakes are recoverable.
-    trash = DATA_DIR / "trash"
-    trash.mkdir(parents=True, exist_ok=True)
-    os.replace(d, trash / f"{pid}-{int(time.time())}")
+    trash = f"trash/{pid}-{int(time.time())}/"
+    for key in keys:  # move aside rather than hard delete, so mistakes are recoverable
+        store.put(trash + key[len(prefix):], store.get(key))
+        store.delete(key)
 
 
 def save_image(pid, data_url, name=""):
@@ -111,123 +113,119 @@ def save_image(pid, data_url, name=""):
     if not m or m.group(1) not in IMAGE_TYPES:
         raise StorageError("Expected a PNG, JPEG, WebP or GIF data URL")
     raw = base64.b64decode(m.group(2))
-    if len(raw) > 8 * 1024 * 1024:
-        raise StorageError("Image too large (8MB max)")
-    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", Path(name).stem)[:40].strip("-") or "img"
+    if len(raw) > 4 * 1024 * 1024:
+        raise StorageError("Image too large (4MB max)")
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", PurePosixPath(name).stem)[:40].strip("-") or "img"
     fname = f"{stem}-{uuid.uuid4().hex[:8]}{IMAGE_TYPES[m.group(1)]}"
-    path = PROJECTS / pid / "images" / fname
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(raw)
+    store.put(f"projects/{pid}/images/{fname}", raw, m.group(1))
     return f"media/{pid}/{fname}"
 
 
-def image_path(pid, fname):
+def get_image(pid, fname):
+    """Returns (bytes, content_type)."""
     check_id(pid)
-    if not re.match(r"^[A-Za-z0-9_.-]{1,80}$", fname) or ".." in fname:
-        raise StorageError("Bad image name", 404)
-    path = PROJECTS / pid / "images" / fname
-    if not path.exists():
+    if not re.match(r"^[A-Za-z0-9_-]{1,60}\.(png|jpg|webp|gif)$", fname):
         raise StorageError("Image not found", 404)
-    return path
+    data = store.get(f"projects/{pid}/images/{fname}")
+    if data is None:
+        raise StorageError("Image not found", 404)
+    return data, EXT_TYPES.get("." + fname.rsplit(".", 1)[1], "application/octet-stream")
 
 
 # ---------------------------------------------------------------- sessions
 
 def list_sessions(pid):
-    d = PROJECTS / check_id(pid) / "sessions"
     out = []
-    if d.exists():
-        for f in d.glob("*.json"):
-            try:
-                s = _read(f)
-            except (OSError, json.JSONDecodeError):
-                continue
-            st = s.get("state", {})
-            out.append({
-                "id": s.get("id", f.stem),
-                "name": s.get("name", f.stem),
-                "updated": s.get("updated"),
-                "turn": st.get("turn", {}).get("number"),
-                "players": [p.get("name") for p in st.get("players", [])],
-                "status": st.get("status"),
-            })
+    for key in store.list(f"projects/{check_id(pid)}/sessions/"):
+        s = _get(key) if key.endswith(".json") else None
+        if not s:
+            continue
+        st = s.get("state", {})
+        out.append({
+            "id": s.get("id", PurePosixPath(key).stem),
+            "name": s.get("name", ""),
+            "updated": s.get("updated"),
+            "turn": st.get("turn", {}).get("number"),
+            "players": [p.get("name") for p in st.get("players", [])],
+            "status": st.get("status"),
+        })
     out.sort(key=lambda s: s.get("updated") or 0, reverse=True)
     return out
 
 
 def get_session(pid, sid):
-    f = PROJECTS / check_id(pid) / "sessions" / f"{check_id(sid)}.json"
-    if not f.exists():
+    s = _get(f"projects/{check_id(pid)}/sessions/{check_id(sid)}.json")
+    if s is None:
         raise StorageError("Session not found", 404)
-    return _read(f)
+    return s
 
 
 def save_session(pid, session):
     sid = check_id(session.get("id") or new_id("s_"))
     session["id"] = sid
-    session["updated"] = int(time.time() * 1000)
-    _write(PROJECTS / check_id(pid) / "sessions" / f"{sid}.json", session)
+    session["updated"] = now_ms()
+    _put(f"projects/{check_id(pid)}/sessions/{sid}.json", session)
     return {"id": sid, "updated": session["updated"]}
 
 
 def delete_session(pid, sid):
-    f = PROJECTS / check_id(pid) / "sessions" / f"{check_id(sid)}.json"
-    if f.exists():
-        f.unlink()
+    store.delete(f"projects/{check_id(pid)}/sessions/{check_id(sid)}.json")
 
 
-# ---------------------------------------------------------------- AI bridge queue
-# The browser posts a prompt here when an AI seat set to "Claude (chat bridge)"
-# needs to move. An agent (e.g. Claude Code in the chat window) answers it with
-# tools/ai_bridge.py, and the browser polls until the answer appears.
+# ---------------------------------------------------------------- AI jobs
+# One job per AI turn. Hosted providers (anthropic/openai) are run by a
+# background worker; "bridge" jobs wait for an agent such as Claude Code to
+# answer them with tools/ai_bridge.py. The browser polls until the job is
+# answered.
 
-def queue_create(prompt, meta=None):
-    rid = new_id("ai_")
-    item = {
-        "id": rid,
-        "created": int(time.time() * 1000),
+JOB_TTL_MS = 7 * 24 * 3600 * 1000
+
+
+def job_create(provider, prompt, meta=None):
+    jid = new_id("ai_")
+    job = {
+        "id": jid,
+        "provider": provider,
+        "created": now_ms(),
         "status": "pending",
         "meta": meta or {},
         "prompt": prompt,
         "response": None,
+        "error": None,
     }
-    _write(QUEUE / f"{rid}.json", item)
-    return item
+    _put(f"jobs/{jid}.json", job)
+    return job
 
 
-def queue_get(rid):
-    f = QUEUE / f"{check_id(rid)}.json"
-    if not f.exists():
-        raise StorageError("Request not found", 404)
-    return _read(f)
+def job_get(jid):
+    job = _get(f"jobs/{check_id(jid)}.json")
+    if job is None:
+        raise StorageError("Job not found", 404)
+    return job
 
 
-def queue_list(status=None):
+def job_update(jid, **fields):
+    job = job_get(jid)
+    job.update(fields)
+    job["updated"] = now_ms()
+    _put(f"jobs/{jid}.json", job)
+    return job
+
+
+def job_list(status=None, provider=None):
     out = []
-    if QUEUE.exists():
-        for f in QUEUE.glob("*.json"):
-            try:
-                item = _read(f)
-            except (OSError, json.JSONDecodeError):
-                continue
-            if status and item.get("status") != status:
-                continue
-            out.append(item)
-    out.sort(key=lambda i: i.get("created") or 0)
+    cutoff = now_ms() - JOB_TTL_MS
+    for key in store.list("jobs/"):
+        job = _get(key)
+        if not job:
+            continue
+        if (job.get("created") or 0) < cutoff:
+            store.delete(key)  # tidy up old jobs
+            continue
+        if status and job.get("status") != status:
+            continue
+        if provider and job.get("provider") != provider:
+            continue
+        out.append(job)
+    out.sort(key=lambda j: j.get("created") or 0)
     return out
-
-
-def queue_answer(rid, text):
-    item = queue_get(rid)
-    item["status"] = "answered"
-    item["response"] = text
-    item["answered"] = int(time.time() * 1000)
-    _write(QUEUE / f"{rid}.json", item)
-    return item
-
-
-def queue_cancel(rid):
-    item = queue_get(rid)
-    item["status"] = "cancelled"
-    _write(QUEUE / f"{rid}.json", item)
-    return item

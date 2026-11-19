@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Card Game Test Bench - API Lambda (Function URL behind CloudFront), private
+  data bucket, and the GitHub Actions role that deploys code and static files.
+  The function code here is a placeholder; GitHub Actions uploads the real code.
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: gametester-api
+  BasePath:
+    Type: String
+    Default: /experiments/gametester
+    Description: URL path the app is served under (stripped before routing)
+  SiteBucket:
+    Type: String
+    Default: shwsh.co.uk
+    Description: Existing public website bucket that holds the static front end
+  SitePrefix:
+    Type: String
+    Default: experiments/gametester
+  DistributionId:
+    Type: String
+    Default: E3LS87IBDVMSCO
+  GitHubRepo:
+    Type: String
+    Default: mabonsdad/gametester
+  GitHubBranch:
+    Type: String
+    Default: main
+  AppPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+  SessionSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+  ApiToken:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+  OriginSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+  AnthropicApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+  ClaudeModel:
+    Type: String
+    Default: claude-opus-5-5
+
+Resources:
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: gametester-data-and-jobs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${DataBucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+              - Effect: Allow  # AI jobs run as async self-invocations
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}"
+
+  Function:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      Description: Card Game Test Bench API
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.handler
+      MemorySize: 512
+      Timeout: 300
+      Role: !GetAtt FunctionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          def handler(event, context):
+              return {"statusCode": 503, "headers": {"Content-Type": "application/json"},
+                      "body": json.dumps({"error": "Not deployed yet - run the GitHub Deploy workflow"})}
+      Environment:
+        Variables:
+          GAMETESTER_S3_BUCKET: !Ref DataBucket
+          BASE_PATH: !Ref BasePath
+          APP_PASSWORD: !Ref AppPassword
+          SESSION_SECRET: !Ref SessionSecret
+          API_TOKEN: !Ref ApiToken
+          ORIGIN_SECRET: !Ref OriginSecret
+          ANTHROPIC_API_KEY: !Ref AnthropicApiKey
+          CLAUDE_MODEL: !Ref ClaudeModel
+          CLAUDE_EFFORT: medium
+
+  FunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt Function.Arn
+      AuthType: NONE  # protected by ORIGIN_SECRET (added by CloudFront) + app login
+
+  FunctionUrlPublicPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  FunctionUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GitHubActionsGametesterDeployRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
+      Policies:
+        - PolicyName: gametester-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::${SiteBucket}"
+                Condition:
+                  StringLike:
+                    s3:prefix: [!Sub "${SitePrefix}", !Sub "${SitePrefix}/*"]
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "arn:aws:s3:::${SiteBucket}/${SitePrefix}/*"
+              - Effect: Allow
+                Action: [lambda:UpdateFunctionCode, lambda:GetFunction, lambda:GetFunctionConfiguration]
+                Resource: !GetAtt Function.Arn
+              - Effect: Allow
+                Action: [cloudfront:CreateInvalidation, cloudfront:GetInvalidation]
+                Resource: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${DistributionId}"
+
+Outputs:
+  FunctionUrl:
+    Value: !GetAtt FunctionUrl.FunctionUrl
+  FunctionUrlDomain:
+    Value: !Select [2, !Split ["/", !GetAtt FunctionUrl.FunctionUrl]]
+  DataBucketName:
+    Value: !Ref DataBucket
+  DeployRoleArn:
+    Value: !GetAtt DeployRole.Arn

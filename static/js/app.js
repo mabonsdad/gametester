@@ -62,13 +62,15 @@ function renderHeader(tab) {
     ) : h('nav', { class: 'tabs' }),
     h('div', { class: 'header-right' },
       project ? h('span', { id: 'save-state', class: `save-state ${saveState}` }, 'Saved') : null,
-      modeBadge),
+      modeBadge,
+      api.canLogout() ? h('button', { class: 'btn small', onclick: async () => { await api.logout(); project = null; route(); } }, 'Log out') : null),
   );
 }
 
 async function route() {
   if (dispose) { try { dispose(); } catch { /* ignore */ } dispose = null; }
   saveSoon.flush();
+  if (api.needsLogin()) return renderLogin();
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   try {
     if (parts[0] === 'p' && parts[1]) {
@@ -93,6 +95,30 @@ async function route() {
   }
 }
 
+function renderLogin() {
+  project = null;
+  renderHeader();
+  const pw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Password' });
+  const msg = h('p', { class: 'muted small' });
+  const submit = async (e) => {
+    e.preventDefault();
+    msg.textContent = 'Checking…';
+    try {
+      if (await api.login(pw.value)) route();
+      else msg.textContent = 'Login failed.';
+    } catch (err) { msg.textContent = err.message; pw.select(); }
+  };
+  clear(root).append(h('div', { class: 'page' },
+    h('form', { class: 'panel login-box', onsubmit: submit },
+      h('h1', {}, 'Card Game Test Bench'),
+      h('p', { class: 'muted' }, 'This test bench is private. Enter the password to continue.'),
+      pw,
+      h('button', { class: 'btn primary', type: 'submit' }, 'Log in'),
+      msg)));
+  pw.focus();
+}
+
+window.addEventListener('gt-login-required', () => { if (api.needsLogin()) renderLogin(); });
 window.addEventListener('hashchange', route);
 await api.init();
 route();
