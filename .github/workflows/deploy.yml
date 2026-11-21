@@ -40,6 +40,8 @@ jobs:
           for f in static/js/*.js static/js/views/*.js; do node --check "$f"; done
       - name: Backend tests
         run: python -m unittest discover -s tests -v
+      - name: Engine tests (rules automation, full Whist games)
+        run: node --test tests/js/*.test.js
 
   deploy:
     needs: test

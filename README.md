@@ -12,6 +12,10 @@ with any mix of human and AI players.
   see every hand, only the active hand, or one seat's view. Drag cards, flip,
   draw, score, undo, and step through turns. AI seats can be played one at a
   time or automatically.
+* **Automation (optional)**: trick-taking play (follow suit, trumps,
+  partnerships, re-dealing), legal-move checking (off / warn / strict) with
+  legal cards highlighted, and scoring rules and end conditions written as
+  simple formulas, e.g. `max(0, teamTricks - 6)`. See the Whist sample.
 * **Insights**: score chart, lead changes, each AI seat's win confidence and
   how its turn felt, plus your notes.
 
@@ -41,7 +45,7 @@ the API on Lambda, data in a private S3 bucket, all behind CloudFront.
 Every push to `main` is tested and deployed by GitHub Actions
 (`.github/workflows/deploy.yml`). Details: [deploy/aws/SETUP.md](deploy/aws/SETUP.md).
 
-Tests: `python3 -m unittest discover -s tests`
+Tests: `python3 -m unittest discover -s tests` and `npm test` (engine, Node 20+)
 
 ## AI players
 
@@ -52,8 +56,8 @@ Pick a controller for each seat when you start a game:
 | Random bot | none. Smoke-tests setup and turn flow; it does not follow the rules |
 | Copy/paste prompt | none. Paste the prompt into any chatbot and paste the JSON reply back |
 | Claude in chat (bridge) | Server running (local or hosted). When the seat's turn comes, ask Claude Code in your chat: *"take the pending AI turn"* (it uses `tools/ai_bridge.py`) |
-| Claude API | `pip install anthropic` and `export ANTHROPIC_API_KEY=...`. Optional: `CLAUDE_MODEL` (default `claude-opus-5-5`), `CLAUDE_EFFORT` (default `medium`) |
-| OpenAI API | `export OPENAI_API_KEY=... OPENAI_MODEL=...` |
+| Claude API | `pip install anthropic` and `export ANTHROPIC_API_KEY=...`. Optional: `CLAUDE_MODEL` (default `claude-sonnet-5-5`, a thinking model at half Opus's price), `CLAUDE_EFFORT` (default `medium`) |
+| OpenAI API | `export OPENAI_API_KEY=... OPENAI_MODEL=...` (the live site uses `gpt-6-sol`) |
 
 Each AI seat sees only what that player could see at a real table, plus the
 rulebook and the card list. It replies with actions and also reports its

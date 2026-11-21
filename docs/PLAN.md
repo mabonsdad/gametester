@@ -59,6 +59,7 @@ browser (static/)                               server.py (optional, stdlib)
 | `turn` | `phases[]`, `drawAtStart {count, from}`, `firstPlayer`, `direction` |
 | `rules` | Free text: overview, objective, turn rules, end of game, scoring, AI hints |
 | `cards[]` | `{id, name, description, rules, count, startZone, color, image, imageMode, stats{}, tags[]}` |
+| `automation` | `style` (free \| tricks), `enforce` (off \| warn \| strict), `autoScore`, `teams`, `tricks{zone, wonZone, suitStat, rankStat, followSuit, trump, trumpSuit, firstLead, redeal}`, `scoring[]{event, who, counter, expr, when, label}`, `endWhen[]{at, expr, winner, label}` |
 | `cardBack` | Colour / image / label |
 
 ### Game state (inside a session file)
@@ -164,12 +165,26 @@ view modes, step-by-step turns, undo, sessions, five AI controllers, basic
 insights (score chart, lead changes, AI feelings, notes).
 
 **Phase 2: better table and rules assistance**
-* Hotseat "pass the device" screen; touch drag for tablets
-* Card templates (layout per card type), CSV import, print-and-play PDF sheets
-* Optional structured effects per card (e.g. `draw 2`, `+3 score`) that the
-  engine can apply. Still optional, so free-text games keep working.
-* Optional legal-move hints and end-of-game conditions (deck empty, score ≥ N)
-* Replay viewer: scrub through a saved session's log
+* Done:
+  * Rules automation (`project.automation`, `static/js/engine.js`):
+    * trick-taking play: follow suit, trumps, partnerships, dealer rotation,
+      re-dealing each hand;
+    * legal-move checking (off / warn / strict) with legal cards highlighted
+      for humans and listed for AI seats;
+    * scoring rules and end conditions written as safe formulas (`static/js/expr.js`).
+  * A plain-English summary of the automated rules, shown in the editor and
+    the play view and sent to AI seats.
+  * Standard 52-card deck generator; Whist sample project.
+* Next:
+  * Free-form legality rules, e.g. "play cards matching colour or number", a
+    hand limit, or one play per turn. These would reuse the same check/highlight path.
+  * Bidding/contract phases (Oh Hell, Spades) as an optional step before the
+    first trick of a hand.
+  * Hotseat "pass the device" screen; touch drag for tablets.
+  * Card templates (layout per card type), CSV import, print-and-play PDF sheets.
+  * Optional structured effects per card (e.g. `draw 2`, `+3 score`) that the
+    engine can apply.
+  * Replay viewer: scrub through a saved session's log.
 
 **Phase 3: batch simulation**
 * Headless runner (Node or Python port of `engine.js`) that plays N games with

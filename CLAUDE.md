@@ -34,6 +34,6 @@ put data under the public site bucket: it is world-readable.
 
 ## Checks
 
-* `python3 -m unittest discover -s tests`
+* `python3 -m unittest discover -s tests` and `node --test tests/js/*.test.js`
 * `node --check static/js/**/*.js` for syntax
 * Run `python3 server.py` and drive it with Playwright (Chromium is preinstalled)
