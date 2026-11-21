@@ -20,7 +20,7 @@ browser ── https://shwsh.co.uk/experiments/gametester/...
 | CloudFront routes | added by `cloudfront_routes.py` (not managed by the stack) |
 | Deploys | `.github/workflows/deploy.yml` on every push to `main` |
 | GitHub access to AWS | role `GitHubActionsGametesterDeployRole` (OIDC; `main` branch of this repo only) |
-| Secrets | `~/.config/gametester/secrets.json` on the owner's Mac (mode 600), also in the Lambda's environment |
+| Secrets | `~/.config/gametester/secrets.json` on the owner's Mac (mode 600), also in the Lambda's environment. Keys match the stack parameters: `AppPassword`, `SessionSecret`, `ApiToken`, `OriginSecret`, `AnthropicApiKey`, `OpenAIApiKey` (optional: `ClaudeModel`, `OpenAIModel`) |
 
 ## Day to day
 
@@ -52,8 +52,9 @@ python3 deploy/aws/cloudfront_routes.py --distribution E3LS87IBDVMSCO \
 
 ## Changing settings
 
-Re-run the stack deploy with only the parameters you change; the others keep
-their values:
+Edit `~/.config/gametester/secrets.json`, rebuild `params.json` from it
+(`["Key=Value", ...]`), and re-run the stack deploy. Or pass the parameters
+directly:
 
 ```bash
 # e.g. add or rotate the Claude API key
