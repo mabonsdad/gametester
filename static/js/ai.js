@@ -98,6 +98,10 @@ function describeZone(project, st, zid, viewer) {
     return `${uid} "${d?.name}"`;
   };
   if (def.visibility === 'owner' && z.owner !== viewer) return `${zid} (${z.name}): ${n} card(s), hidden`;
+  if (isTricks(project) && z.defId === automation(project).tricks.wonZone && z.owner) {
+    const tricks = Math.round(n / st.players.length);
+    return `${zid} (${z.name}): ${tricks} trick(s) won this hand (${n} cards, face down)`;
+  }
   if (def.layout === 'stack') {
     const top = z.cards[n - 1];
     const topText = top ? (isVisibleTo(project, st, top, viewer) ? `top card ${name(top)}` : 'top card face down') : 'empty';
@@ -125,6 +129,7 @@ export function buildUserPrompt(project, st, pid) {
     trickInfo = `
 Hand ${H.number}. Dealer: ${st.players[st.dealer].name}. Trumps: ${H.trump || 'none'}${H.trumpCard ? ` (turned-up card ${nm(H.trumpCard)}, held by the dealer)` : ''}.
 ${team ? `Your partnership: ${team.name}.\n` : ''}Tricks won this hand: ${tally}${st.teams.length ? ` | ${st.teams.map((t) => `${t.name}: ${t.players.reduce((a, id) => a + (H.tricksWon[id] || 0), 0)}`).join(', ')}` : ''}.
+Cards left in hand: ${st.players.map((p) => `${p.name} ${st.zones[`${p.id}.hand`]?.cards.length ?? 0}${H.trick.some((t) => t.pid === p.id) ? ' (has played to this trick)' : ''}`).join(', ')}.
 Current trick${H.led ? ` (${H.led} led)` : ''}: ${H.trick.length ? H.trick.map((t) => `${player(st, t.pid).name} played ${nm(t.card)}`).join('; ') : 'empty - you are leading'}.
 ${st.lastTrick ? `Last trick: won by ${player(st, st.lastTrick.winner).name} (${st.lastTrick.plays.map((t) => `${player(st, t.pid).name} ${nm(t.card)}`).join(', ')}).\n` : ''}
 ${lm.summary}
