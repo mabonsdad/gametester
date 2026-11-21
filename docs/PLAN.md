@@ -59,7 +59,7 @@ browser (static/)                               server.py (optional, stdlib)
 | `turn` | `phases[]`, `drawAtStart {count, from}`, `firstPlayer`, `direction` |
 | `rules` | Free text: overview, objective, turn rules, end of game, scoring, AI hints |
 | `cards[]` | `{id, name, description, rules, count, startZone, color, image, imageMode, stats{}, tags[]}` |
-| `automation` | `style` (free \| tricks), `enforce` (off \| warn \| strict), `autoScore`, `teams`, `tricks{zone, wonZone, suitStat, rankStat, followSuit, trump, trumpSuit, firstLead, redeal}`, `scoring[]{event, who, counter, expr, when, label}`, `endWhen[]{at, expr, winner, label}` |
+| `automation` | `style` (free \| tricks \| shedding), `enforce` (off \| warn \| strict), `autoScore`, `teams`, `tricks{zone, wonZone, suitStat, rankStat, followSuit, trump, trumpSuit, firstLead, redeal}`, `shedding{drawZone, discardZone, colourStat, valueStat, effectStat, wildColour, playDrawn}`, `scoring[]{event, who, counter, expr, when, label}`, `endWhen[]{at, expr, winner, label}` |
 | `cardBack` | Colour / image / label |
 
 ### Game state (inside a session file)
@@ -175,11 +175,18 @@ insights (score chart, lead changes, AI feelings, notes).
   * A plain-English summary of the automated rules, shown in the editor and
     the play view and sent to AI seats.
   * Standard 52-card deck generator; Whist sample project.
+  * Shedding style (match colour or value, draw, card effects
+    `skip / reverse / draw:N / wild`, rounds scored from the cards left in other
+    hands); Switchback sample, an original game in the Crazy Eights family.
+  * Optional pauses after each trick and each hand or round; a game-over screen
+    with standings and "Play again".
 * Next:
   * Free-form legality rules, e.g. "play cards matching colour or number", a
     hand limit, or one play per turn. These would reuse the same check/highlight path.
   * Bidding/contract phases (Oh Hell, Spades) as an optional step before the
     first trick of a hand.
+  * More shedding options: stacking draw cards, challenging a draw-four, a
+    "call your last card" penalty, house rules like jump-in.
   * Hotseat "pass the device" screen; touch drag for tablets.
   * Card templates (layout per card type), CSV import, print-and-play PDF sheets.
   * Optional structured effects per card (e.g. `draw 2`, `+3 score`) that the

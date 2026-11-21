@@ -14,11 +14,12 @@ let dispose = null;
 let saveState = 'saved';
 
 const saveNow = async () => {
-  if (!project) return;
+  const p = project; // the user may navigate away while this is saving
+  if (!p) return;
   setSaveState('saving');
   try {
-    const saved = await api.saveProject(project);
-    project.updated = saved.updated;
+    const saved = await api.saveProject(p);
+    p.updated = saved?.updated ?? p.updated;
     setSaveState('saved');
   } catch (e) {
     setSaveState('error');

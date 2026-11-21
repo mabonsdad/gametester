@@ -4,7 +4,7 @@ import * as api from '../api.js';
 import { CONTROLLERS, checkAction as aiCheck, isAI, parseResponse, requestTurn } from '../ai.js';
 import {
   activePlayer, apply, automation, cardDef, checkAction as ruleCheck, clone, competitorName, competitors, createGame,
-  describeAutomation, isTricks, leadStats, legalMoves, player, teamOf,
+  cardEffects, describeAutomation, isAutomated, isShedding, isTricks, leadStats, legalMoves, player, shedColours, shedTop, teamOf,
 } from '../engine.js';
 import { SUITS, uid, zoneDef } from '../model.js';
 import { cardBack, cardFace, confirmDialog, debounce, download, field, fmtTime, h, modal, toast } from '../ui.js';
@@ -81,6 +81,9 @@ export async function renderPlay(root, ctx, args) {
     };
     drawSeats();
     const seedIn = h('input', { type: 'text', placeholder: 'random', size: 12 });
+    const options = { pauseTricks: true, pauseHands: true };
+    const optBox = (key, label) => h('label', { class: 'inline' },
+      h('input', { type: 'checkbox', checked: options[key], onchange: (e) => { options[key] = e.target.checked; } }), ' ', label);
     const totalCards = project.cards.reduce((n, c) => n + (parseInt(c.count, 10) || 0), 0);
     const aiInfo = api.serverInfo()?.ai;
 
@@ -98,21 +101,18 @@ export async function renderPlay(root, ctx, args) {
             h('button', { class: 'btn small', onclick: () => { seats.forEach((s) => { s.controller = 'human'; }); drawSeats(); } }, 'All human'),
             h('button', { class: 'btn small', onclick: () => { seats.forEach((s, i) => { s.controller = i === 0 ? 'human' : 'ai-random'; }); drawSeats(); } }, 'Me + random bots'),
             serverMode ? h('button', { class: 'btn small', onclick: () => { seats.forEach((s, i) => { s.controller = i === 0 ? 'human' : 'ai-bridge'; }); drawSeats(); } }, 'Me + Claude (chat)') : null),
+          isAutomated(project) ? h('div', { class: 'stack' },
+            h('span', { class: 'field-label' }, 'Pauses'),
+            isTricks(project) ? optBox('pauseTricks', 'Pause after each trick, so everyone can see who won it') : null,
+            optBox('pauseHands', `Pause at the end of each ${isShedding(project) ? 'round' : 'hand'} to show the scores`)) : null,
           field('Random seed', seedIn, 'Same seed + same actions = same game. Leave blank for a new shuffle.'),
           h('p', { class: 'muted small' }, aiProviderNote(serverMode, aiInfo)),
           h('button', {
             class: 'btn primary', disabled: !totalCards, onclick: async () => {
               const seedRaw = seedIn.value.trim();
               const seed = seedRaw ? (/^\d+$/.test(seedRaw) ? parseInt(seedRaw, 10) : hashString(seedRaw)) : undefined;
-              try {
-                st = createGame(project, { players: seats.slice(0, count), seed });
-              } catch (e) { toast(e.message, 'error'); return; }
-              session = { id: uid('s_'), name: `${project.name} - ${new Date().toLocaleString()}`, projectId: project.id, created: Date.now(), state: st };
-              history = [];
               view.seat = 'p1';
-              await api.saveSession(project.id, session).catch((e) => toast(e.message, 'error'));
-              history_replace(session.id);
-              drawGame();
+              await startGame(seats.slice(0, count), options, seed);
             },
           }, 'Start game')),
         h('section', { class: 'panel' },
@@ -128,6 +128,36 @@ export async function renderPlay(root, ctx, args) {
                   if (await confirmDialog('Delete session', `Delete "${s.name}"?`, 'Delete')) { await api.deleteSession(project.id, s.id); drawSetup(); }
                 },
               }, 'Delete'))))) : h('p', { class: 'muted' }, 'No saved sessions yet. Every game is saved automatically as you play.')))));
+  }
+
+  async function startGame(players, options, seed) {
+    try {
+      st = createGame(project, { players, seed, options });
+    } catch (e) { toast(e.message, 'error'); return; }
+    session = { id: uid('s_'), name: `${project.name} - ${new Date().toLocaleString()}`, projectId: project.id, created: Date.now(), state: st };
+    history = [];
+    selected = null;
+    await api.saveSession(project.id, session).catch((e) => toast(e.message, 'error'));
+    history_replace(session.id);
+    drawGame();
+  }
+
+  // Same seats, controllers and pause settings; a new shuffle.
+  async function playAgain() {
+    await persist.flush();
+    await startGame(st.players.map((p) => ({ name: p.name, controller: p.controller })), { ...st.options }, undefined);
+    toast('New game started with the same seats.');
+  }
+
+  function backToSetup() {
+    persist.flush();
+    session = null; st = null;
+    drawSetup();
+    window.history.replaceState(null, '', `#/p/${project.id}/play`);
+  }
+
+  function continuePlay() {
+    commit({ type: 'continue', actor: 'designer' });
   }
 
   function history_replace(sid) {
@@ -203,7 +233,7 @@ export async function renderPlay(root, ctx, args) {
   // ------------------------------------------------------------ AI
   function scheduleAuto() {
     clearTimeout(autoTimer);
-    if (!view.auto || aiBusy || st.status !== 'playing') return;
+    if (!view.auto || aiBusy || st.status !== 'playing' || st.pending) return;
     if (!isAI(activePlayer(st).controller)) return;
     if (activePlayer(st).controller === 'ai-manual') return; // needs a human anyway
     autoTimer = setTimeout(() => runAiTurn(), 700);
@@ -211,10 +241,14 @@ export async function renderPlay(root, ctx, args) {
 
   async function runAiTurn() {
     if (aiBusy || st.status !== 'playing') return;
+    if (st.pending) return toast('The game is paused - press Next first.', 'warn');
     const p = activePlayer(st);
     if (!isAI(p.controller)) return toast(`${p.name} is a human seat.`, 'warn');
     const turnAtStart = st.turn.number;
     const tricks = isTricks(project);
+    const shedding = isShedding(project);
+    const automated = tricks || shedding;
+    const maxAsks = shedding ? 3 : tricks ? 2 : 1;
     const strict = automation(project).enforce === 'strict';
     const act = (a) => apply(project, st, { ...a, actor: a.actor || p.id });
     const myTurn = () => st.status === 'playing' && activePlayer(st).id === p.id && st.turn.number === turnAtStart;
@@ -225,8 +259,9 @@ export async function renderPlay(root, ctx, args) {
       let parsed = null;
       let endRequested = false;
       let snapshotTaken = false;
-      // Trick games get one retry, with the reason, if the AI's card is not legal.
-      for (let attempt = 0; attempt < 2; attempt++) {
+      // Automated games ask again (with the reason) if the move was not legal,
+      // and shedding games ask again after a draw (play the drawn card or pass).
+      for (let attempt = 0; attempt < maxAsks; attempt++) {
         const res = await requestTurn(project, st, {
           manual: manualPrompt,
           waiting: (message, cancel) => { aiBusy = { message, cancel }; drawSide(); },
@@ -241,7 +276,7 @@ export async function renderPlay(root, ctx, args) {
           if (!myTurn()) break;
           if (!raw || typeof raw !== 'object') continue;
           const a = { ...raw, actor: p.id };
-          if (a.type === 'endTurn') { endRequested = true; break; } // applied after the assessment
+          if (a.type === 'endTurn' && !automated) { endRequested = true; break; } // applied after the assessment
           const blocked = aiCheck(project, st, p.id, a);
           const broken = ruleCheck(project, st, a);
           if (blocked || (broken && strict)) {
@@ -257,9 +292,12 @@ export async function renderPlay(root, ctx, args) {
           }
           if (a.type === 'endGame') break;
         }
-        if (tricks && myTurn() && attempt === 0) {
-          feedback = rejected.join(' ') || 'You did not play a card.';
-          aiBusy = { message: `${p.name}'s move was not legal - asking again…`, cancel: null };
+        if (automated && myTurn() && attempt < maxAsks - 1) {
+          const drew = shedding && st.hand.drew && !rejected.length;
+          feedback = rejected.length ? rejected.join(' ')
+            : drew ? `You drew ${cardDef(project, st, st.hand.drawn)?.name} (${st.hand.drawn}). Play it now, or pass with {"type":"endTurn"}.`
+              : 'You did not make a legal move.';
+          aiBusy = { message: drew ? `${p.name} drew a card - asking whether to play it…` : `${p.name}'s move was not legal - asking again…`, cancel: null };
           drawSide();
           continue;
         }
@@ -267,7 +305,16 @@ export async function renderPlay(root, ctx, args) {
       }
       act({ type: 'assess', winConfidence: numOrNull(parsed.winConfidence), experience: parsed.experience || '' });
       if (parsed.designerNotes) act({ type: 'note', text: `Designer feedback: ${parsed.designerNotes}`, kind: 'feedback' });
-      if (tricks) {
+      if (shedding) {
+        if (myTurn() && legalMoves(project, st, p.id).canDraw) {
+          act({ type: 'note', actor: 'system', text: `${p.name} did not make a legal move; the harness draws a card for them.` });
+          act({ type: 'draw' });
+        }
+        if (myTurn() && legalMoves(project, st, p.id).canPass) {
+          act({ type: 'note', actor: 'system', text: `${p.name} passes (harness).` });
+          act({ type: 'endTurn' });
+        }
+      } else if (tricks) {
         if (myTurn()) {
           const lm = legalMoves(project, st, p.id);
           const card = lm.legal[Math.floor(Math.random() * lm.legal.length)];
@@ -317,6 +364,9 @@ export async function renderPlay(root, ctx, args) {
           st.players.map((p) => h('option', { value: p.id }, p.name))) : null,
         h('label', { class: 'inline', title: 'Put the viewing seat at the bottom of the screen' },
           h('input', { type: 'checkbox', checked: view.rotate, onchange: (e) => { view.rotate = e.target.checked; saveView(); render(); } }), ' Viewer at bottom'),
+        isAutomated(project) ? h('span', { class: 'inline small pause-opts', title: 'Pause points: the game waits for Next' }, 'Pause after: ',
+          isTricks(project) ? h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: !!st.options?.pauseTricks, onchange: (e) => { st.options.pauseTricks = e.target.checked; persist(); } }), ' tricks ') : null,
+          h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: !!st.options?.pauseHands, onchange: (e) => { st.options.pauseHands = e.target.checked; persist(); } }), isShedding(project) ? ' rounds' : ' hands')) : null,
         h('label', { class: 'inline' }, 'Card size ',
           h('input', { type: 'range', min: 50, max: 130, value: view.size, oninput: (e) => { view.size = +e.target.value; saveView(); tableEl.style.setProperty('--cw', view.size + 'px'); } }))),
       h('div', { class: 'row gap' },
@@ -338,9 +388,58 @@ export async function renderPlay(root, ctx, args) {
       h('div', { class: 'table-row top' }, seatsFor('top')),
       h('div', { class: 'table-row mid' },
         layout.left ? h('div', { class: 'table-side' }, seatsFor('left')) : null,
-        h('div', { class: 'felt' }, shared.map((zid) => zoneEl(zid))),
+        h('div', { class: 'felt' }, shared.map((zid) => zoneEl(zid)), feltBanner()),
         layout.right ? h('div', { class: 'table-side' }, seatsFor('right')) : null),
       h('div', { class: 'table-row bottom' }, seatsFor('bottom')));
+  }
+
+  // Pause and game-over messages shown in the middle of the table.
+  function feltBanner() {
+    const cname = (u) => cardDef(project, st, u)?.name || u;
+    if (st.status === 'ended') {
+      const names = (st.result?.winners || []).map((w) => player(st, w)?.name);
+      const team = names.length && teamOf(st, st.result.winners[0]);
+      const rows = competitors(st).map((c) => ({ c, counters: player(st, c.rep).counters }))
+        .sort((a, b) => (b.counters[project.counters[0]?.id] ?? 0) - (a.counters[project.counters[0]?.id] ?? 0));
+      return h('div', { class: 'felt-banner gameover' },
+        h('h2', {}, 'Game over'),
+        h('p', { class: 'big' }, names.length ? `${team ? team.name.split(' (')[0] + ' - ' : ''}${names.join(' & ')} win${names.length > 1 ? '' : 's'}!` : 'No winner recorded'),
+        st.result?.reason ? h('p', { class: 'muted' }, st.result.reason) : null,
+        h('table', { class: 'mini-table standings' },
+          h('thead', {}, h('tr', {}, h('th', {}, st.teams.length ? 'Team' : 'Player'), project.counters.map((c) => h('th', {}, c.name)))),
+          h('tbody', {}, rows.map(({ c, counters }) => h('tr', { class: st.result?.winners?.includes(c.rep) ? 'win' : '' },
+            h('td', {}, c.name), project.counters.map((k) => h('td', {}, counters[k.id] ?? 0)))))),
+        h('p', { class: 'muted small' }, `${st.handsPlayed ? `${st.handsPlayed} ${isShedding(project) ? 'round' : 'hand'}(s), ` : ''}${st.turn.number} turns.`),
+        h('div', { class: 'row gap wrap center' },
+          h('button', { class: 'btn primary', onclick: playAgain }, 'Play again ▶'),
+          h('button', { class: 'btn', onclick: backToSetup }, 'Change players…'),
+          h('button', { class: 'btn', onclick: () => { sideTab = 'insights'; drawSide(); } }, 'See insights')));
+    }
+    const P = st.pending;
+    if (!P) return null;
+    if (P.type === 'trick') {
+      return h('div', { class: 'felt-banner low' },
+        h('p', { class: 'big' }, `Trick ${P.number}: ${player(st, P.winner).name} wins with ${cname(P.winningCard)}`),
+        teamOf(st, P.winner) ? h('p', { class: 'muted small' }, `${teamOf(st, P.winner).name.split(' (')[0]} takes the trick.`) : null,
+        h('button', { class: 'btn primary', onclick: continuePlay }, 'Next trick ▶'));
+    }
+    const L = st.lastHand;
+    const noun = isShedding(project) ? 'round' : 'hand';
+    return h('div', { class: 'felt-banner' },
+      h('p', { class: 'big' }, isShedding(project) && L?.winner ? `Round ${L.number}: ${player(st, L.winner).name} went out!` : `End of ${noun} ${L?.number ?? ''}`),
+      L ? h('table', { class: 'mini-table standings' },
+        h('thead', {}, h('tr', {}, h('th', {}, st.teams.length ? 'Team' : 'Player'), L.tricks ? h('th', {}, 'Tricks') : null,
+          project.counters.map((c) => h('th', {}, `${c.name} (+)`)))),
+        h('tbody', {}, L.changes.map((ch) => h('tr', {},
+          h('td', {}, ch.name), L.tricks ? h('td', {}, L.tricks[ch.id]) : null,
+          project.counters.map((c) => h('td', {}, `${ch.totals[c.id] ?? 0}`, ch.deltas[c.id] ? h('span', { class: 'delta' }, ` (+${ch.deltas[c.id]})`) : null)))))) : null,
+      L?.scoreLines?.length ? h('ul', { class: 'score-why' }, L.scoreLines.map((t) => h('li', {}, t.replace(/^Score: /, '')))) : h('p', { class: 'muted small' }, 'No points scored this time.'),
+      h('button', { class: 'btn primary', onclick: continuePlay }, `Deal next ${noun} ▶`));
+  }
+
+  function colourHex(colour) {
+    const S = project.automation.shedding;
+    return project.cards.find((c) => String(c.stats?.[S.colourStat]) === colour)?.color || '#888';
   }
 
   function seatEl(p, side) {
@@ -355,10 +454,11 @@ export async function renderPlay(root, ctx, args) {
       h('div', { class: 'seat-head' },
         h('span', { class: 'seat-name' }, active ? '▶ ' : '', p.name, winner ? ' 🏆' : ''),
         st.hand && st.dealer === p.seat ? h('span', { class: 'dealer-chip', title: 'Dealer' }, 'Dealer') : null,
+        isShedding(project) && st.status === 'playing' && st.zones[`${p.id}.hand`]?.cards.length === 1 ? h('span', { class: 'lastcard-chip' }, 'Last card!') : null,
         team ? h('span', { class: `team-chip ${team.id}`, title: team.name }, team.name.split(' (')[0]) : null,
         h('span', { class: `ctrl ${isAI(p.controller) ? 'ai' : 'human'}`, title: CONTROLLERS[p.controller]?.label }, isAI(p.controller) ? 'AI' : 'Human'),
         h('span', { class: 'counters' },
-          st.hand ? h('span', { class: 'counter', title: 'Tricks won this hand' }, 'Tricks ', h('b', {}, st.hand.tricksWon[p.id] || 0)) : null,
+          st.hand && isTricks(project) ? h('span', { class: 'counter', title: 'Tricks won this hand' }, 'Tricks ', h('b', {}, st.hand.tricksWon[p.id] || 0)) : null,
           project.counters.map((c) => h('span', { class: 'counter' },
             auto ? null : h('button', { class: 'mini', title: `-1 ${c.name}`, onclick: () => commit({ type: 'counter', player: p.id, counter: c.id, delta: -1, actor: 'designer' }) }, '−'),
             h('span', { title: auto ? `${c.name} (scored automatically)` : c.name }, `${c.name} `, h('b', {}, p.counters[c.id] ?? 0)),
@@ -380,7 +480,9 @@ export async function renderPlay(root, ctx, args) {
         e.preventDefault();
         el.classList.remove('drop');
         const card = e.dataTransfer.getData('text/card');
-        if (card && st.cards[card]?.zone !== zid) commit({ type: 'move', card, to: zid });
+        const lm = legalNow();
+        if (card && lm && zid === lm.target && st.cards[card]?.zone === `${lm.pid}.hand`) playCard(card);
+        else if (card && st.cards[card]?.zone !== zid) commit({ type: 'move', card, to: zid });
       },
     });
     const head = h('div', { class: 'zone-head' }, h('span', {}, label), h('span', { class: 'count' }, z.cards.length));
@@ -389,11 +491,12 @@ export async function renderPlay(root, ctx, args) {
       const who = Object.fromEntries(st.hand.trick.map((t) => [t.card, player(st, t.pid).name]));
       el.classList.add('trick-zone');
       el.append(head, h('div', { class: 'cards' }, z.cards.length
-        ? z.cards.map((c) => h('div', { class: 'trick-play' }, cardEl(c), h('span', { class: 'trick-who' }, who[c] || '')))
+        ? z.cards.map((c) => h('div', { class: `trick-play ${st.pending?.type === 'trick' && st.pending.winningCard === c ? 'winning' : ''}` }, cardEl(c), h('span', { class: 'trick-who' }, who[c] || '')))
         : h('div', { class: 'empty-hint' }, st.status === 'playing' ? `${activePlayer(st).name} to lead` : 'empty')));
       return el;
     }
-    if (layout === 'stack' && !tricks) {
+    const automated = isAutomated(project);
+    if (layout === 'stack' && !automated) {
       head.append(
         h('button', { class: 'mini', title: `Active player draws 1 from ${z.name}`, disabled: !z.cards.length, onclick: () => commit({ type: 'draw', from: zid, count: 1 }) }, 'Draw'),
         h('button', { class: 'mini', title: 'Shuffle', disabled: z.cards.length < 2, onclick: () => commit({ type: 'shuffle', zone: zid }) }, '⤮'));
@@ -402,23 +505,29 @@ export async function renderPlay(root, ctx, args) {
         top ? h('div', { class: 'pile', style: { '--depth': Math.min(6, Math.ceil(z.cards.length / 6)) } }, cardEl(top)) : h('div', { class: 'card empty-slot' })));
     } else if (layout === 'stack') {
       const top = z.cards[z.cards.length - 1];
+      const isDiscard = isShedding(project) && st.hand && zid === project.automation.shedding.discardZone;
       el.append(head, h('div', { class: 'cards' },
         top ? h('div', { class: 'pile', style: { '--depth': Math.min(6, Math.ceil(z.cards.length / 6)) } }, cardEl(top)) : h('div', { class: 'card empty-slot' })));
+      if (isDiscard && st.hand.colour) el.append(h('div', { class: 'colour-chip', style: { background: colourHex(st.hand.colour) } }, `Colour: ${st.hand.colour}`));
     } else {
-      const cards = layout === 'hand' && tricks ? sortHand(z.cards) : z.cards;
+      const cards = layout === 'hand' && automated ? sortHand(z.cards) : z.cards;
       el.append(head, h('div', { class: `cards ${layout === 'hand' && cards.length > 8 ? 'many' : ''}` }, cards.length ? cards.map((c) => cardEl(c)) : h('div', { class: 'empty-hint' }, 'empty')));
     }
     return el;
   }
 
-  // Display order for trick-game hands: by suit, then rank (high to low).
+  // Display order for automated games' hands: by suit/colour, then rank/value.
   function sortHand(cards) {
-    const T = automation(project).tricks;
-    const order = SUITS.map((x) => x.name);
+    const A = automation(project);
+    const shed = isShedding(project);
+    const groupStat = shed ? A.shedding.colourStat : A.tricks.suitStat;
+    const valueStat = shed ? A.shedding.valueStat : A.tricks.rankStat;
+    const order = shed ? shedColours(project) : SUITS.map((x) => x.name);
     const key = (u) => {
       const stats = cardDef(project, st, u)?.stats || {};
-      const si = order.indexOf(stats[T.suitStat]);
-      return [si < 0 ? 99 : si, String(stats[T.suitStat] ?? ''), -(Number(stats[T.rankStat]) || 0)];
+      const si = order.indexOf(String(stats[groupStat]));
+      const v = Number(stats[valueStat]);
+      return [si < 0 ? 99 : si, String(stats[groupStat] ?? ''), shed ? (Number.isFinite(v) ? v : 50) : -(v || 0)];
     };
     return cards.slice().sort((a, b) => {
       const ka = key(a); const kb = key(b);
@@ -433,6 +542,15 @@ export async function renderPlay(root, ctx, args) {
   function playCard(cuid) {
     const lm = legalNow();
     if (!lm) return;
+    const actor = activePlayer(st);
+    if (isShedding(project) && cardEffects(project, st, cuid).wild && !lm.cards[cuid] && !isAI(actor.controller)) {
+      // Ask which colour to follow.
+      const dlg = modal('Choose a colour', h('div', { class: 'colour-picker' }, lm.colours.map((c) => h('button', {
+        class: 'btn colour-btn', style: { background: colourHex(c) },
+        onclick: () => { dlg.close(); commit({ type: 'move', card: cuid, to: lm.target, choose: c }); },
+      }, c))), [{ label: 'Cancel' }]);
+      return;
+    }
     commit({ type: 'move', card: cuid, to: lm.target });
   }
 
@@ -475,12 +593,24 @@ export async function renderPlay(root, ctx, args) {
         h('h3', {}, 'Game over'),
         h('p', {}, `Winner: ${names}`), st.result?.reason ? h('p', { class: 'muted' }, st.result.reason) : null,
         h('div', { class: 'row gap wrap' },
+          h('button', { class: 'btn small primary', onclick: playAgain }, 'Play again'),
           h('button', { class: 'btn small', onclick: undo }, 'Undo'),
           h('button', { class: 'btn small', onclick: () => { sideTab = 'insights'; drawSide(); } }, 'See insights'),
-          h('button', { class: 'btn small primary', onclick: () => { session = null; st = null; drawSetup(); window.history.replaceState(null, '', `#/p/${project.id}/play`); } }, 'New game')));
+          h('button', { class: 'btn small', onclick: backToSetup }, 'Change players…')));
+    }
+    if (st.pending) {
+      const trick = st.pending.type === 'trick';
+      return h('div', { class: 'turn-panel paused' },
+        h('div', { class: 'turn-line' }, h('strong', {}, 'Paused'),
+          h('span', { class: 'muted small' }, trick ? 'The trick stays on the table until you continue.' : `Scores for the last ${isShedding(project) ? 'round' : 'hand'} are shown on the table.`)),
+        h('div', { class: 'row gap wrap' },
+          h('button', { class: 'btn primary', onclick: continuePlay, title: 'Enter' }, trick ? 'Next trick ▶' : `Deal next ${isShedding(project) ? 'round' : 'hand'} ▶`),
+          h('button', { class: 'btn', onclick: undo, title: 'Ctrl+Z' }, 'Undo')));
     }
     const ai = isAI(p.controller);
     const tricks = isTricks(project) && st.hand;
+    const shedding = isShedding(project) && st.hand;
+    const automated = tricks || shedding;
     const lm = legalNow();
     const H = st.hand;
     const sym = (suit) => SUITS.find((x) => x.name === suit)?.symbol || '';
@@ -488,13 +618,19 @@ export async function renderPlay(root, ctx, args) {
     return h('div', { class: 'turn-panel' },
       h('div', { class: 'turn-line' }, h('span', { class: 'muted' }, tricks
         ? `Hand ${H.number} · trick ${H.tricksPlayed + 1}`
-        : `Turn ${st.turn.number} · round ${Math.floor((st.turn.number - 1) / st.players.length) + 1}`),
+        : shedding ? `Round ${H.number} · turn ${st.turn.number}`
+          : `Turn ${st.turn.number} · round ${Math.floor((st.turn.number - 1) / st.players.length) + 1}`),
         h('strong', {}, p.name), h('span', { class: `ctrl ${ai ? 'ai' : 'human'}` }, CONTROLLERS[p.controller]?.label || p.controller)),
       tricks ? h('div', { class: 'trick-facts' },
         h('span', { class: `trump ${['Hearts', 'Diamonds'].includes(H.trump) ? 'red' : ''}` }, H.trump ? `Trumps ${sym(H.trump)} ${H.trump}` : 'No trumps'),
         H.trumpCard ? h('span', { class: 'muted small' }, `(${cname(H.trumpCard)} turned up)`) : null,
         h('span', { class: 'muted small' }, `Dealer: ${st.players[st.dealer].name}`),
         H.led ? h('span', { class: 'muted small' }, `Led: ${sym(H.led)} ${H.led}`) : null) : null,
+      shedding ? h('div', { class: 'trick-facts' },
+        h('span', { class: 'colour-chip inline-chip', style: { background: colourHex(H.colour) } }, `Colour: ${H.colour}`),
+        shedTop(project, st) ? h('span', { class: 'muted small' }, `Top: ${cname(shedTop(project, st))}`) : null,
+        h('span', { class: 'muted small' }, st.dir === 1 ? 'Direction: ⟳ normal' : 'Direction: ⟲ reversed'),
+        h('span', { class: 'muted small' }, `Draw pile: ${st.zones[project.automation.shedding.drawZone]?.cards.length ?? 0}`)) : null,
       lm ? h('div', { class: 'you-can' }, h('b', {}, `${p.name}: `), lm.summary,
         ai ? null : h('span', { class: 'muted small' }, ' Legal cards are outlined in green - double-click one, or select it and press Play.')) : null,
       tricks && st.lastTrick ? h('div', { class: 'last-trick small' },
@@ -505,8 +641,10 @@ export async function renderPlay(root, ctx, args) {
         aiBusy.cancel ? h('button', { class: 'btn small', onclick: () => aiBusy.cancel() }, 'Cancel') : null) : null,
       h('div', { class: 'row gap wrap' },
         ai ? h('button', { class: 'btn primary', disabled: !!aiBusy, onclick: runAiTurn }, `▶ Play ${p.name}'s turn`) : null,
-        phases.length > 1 && !tricks ? h('button', { class: 'btn', disabled: !!aiBusy || st.turn.phase >= phases.length - 1, onclick: () => commit({ type: 'phase' }) }, 'Next phase') : null,
-        tricks ? null : h('button', { class: `btn ${ai ? '' : 'primary'}`, disabled: !!aiBusy, onclick: () => commit({ type: 'endTurn' }) }, 'End turn ⏎'),
+        phases.length > 1 && !automated ? h('button', { class: 'btn', disabled: !!aiBusy || st.turn.phase >= phases.length - 1, onclick: () => commit({ type: 'phase' }) }, 'Next phase') : null,
+        shedding && !ai && lm?.canDraw ? h('button', { class: `btn ${lm.legal.length ? '' : 'primary'}`, onclick: () => commit({ type: 'draw' }) }, 'Draw a card') : null,
+        shedding && !ai && lm?.canPass ? h('button', { class: 'btn', onclick: () => commit({ type: 'endTurn' }) }, 'Pass') : null,
+        automated ? null : h('button', { class: `btn ${ai ? '' : 'primary'}`, disabled: !!aiBusy, onclick: () => commit({ type: 'endTurn' }) }, 'End turn ⏎'),
         h('button', { class: 'btn', disabled: !!aiBusy, onclick: undo, title: 'Ctrl+Z' }, 'Undo'),
         h('button', { class: 'btn', disabled: !!aiBusy, onclick: endGameDialog, title: 'End the game now (as the referee)' }, 'End game…')),
       h('label', { class: 'inline small' },
@@ -548,7 +686,7 @@ export async function renderPlay(root, ctx, args) {
         Object.keys(def.stats || {}).length ? h('p', { class: 'small' }, Object.entries(def.stats).map(([k, v]) => `${k}: ${v}`).join(' · ')) : null)
         : h('p', { class: 'muted' }, 'Face down / hidden from this view.'),
       h('p', { class: 'small muted' }, `${selected} · in ${z.name} · ${c.faceUp ? 'face up' : 'face down'}`),
-      isTricks(project) ? h('details', { class: 'referee' }, h('summary', {}, 'Referee tools (move or flip any card)'), tools) : tools);
+      isAutomated(project) ? h('details', { class: 'referee' }, h('summary', {}, 'Referee tools (move or flip any card)'), tools) : tools);
   }
 
   function logPanel() {
@@ -644,7 +782,8 @@ export async function renderPlay(root, ctx, args) {
   const onKey = (e) => {
     if (!st || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.querySelector('.modal-overlay')) return;
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); }
-    else if (e.key === 'Enter' && !aiBusy && st.status === 'playing' && !isAI(activePlayer(st).controller) && !isTricks(project)) commit({ type: 'endTurn' });
+    else if (e.key === 'Enter' && st.pending) continuePlay();
+    else if (e.key === 'Enter' && !aiBusy && st.status === 'playing' && !isAI(activePlayer(st).controller) && !isAutomated(project)) commit({ type: 'endTurn' });
     else if (e.key === 'Escape') { selected = null; drawTable(); drawSide(); }
   };
   document.addEventListener('keydown', onKey);

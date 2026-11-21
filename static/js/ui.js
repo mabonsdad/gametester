@@ -139,6 +139,16 @@ export function cardFace(def, { size, extraClass = '' } = {}) {
       h('div', { class: 'pc-pip' }, symbol),
       h('div', { class: 'pc-corner bottom' }, h('b', {}, index), h('span', {}, symbol)));
   }
+  if ((def.tags || []).includes('colour-card') && !def.image) {
+    const v = String(def.stats?.value ?? def.name);
+    const big = { skip: '⊘', reverse: '⇄', wild: '★', 'wild+4': '+4' }[v] || v;
+    const wild = String(def.stats?.colour) === 'Wild';
+    return h('div', { class: `card face colourcard ${wild ? 'wild' : ''} ${extraClass}`, style, title: `${def.name} - ${def.description || ''}` },
+      h('div', { class: 'cc-corner' }, big),
+      h('div', { class: 'cc-oval' }, big),
+      h('div', { class: 'cc-name' }, def.name),
+      h('div', { class: 'cc-corner bottom' }, big));
+  }
   const stats = Object.entries(def.stats || {});
   return h('div', { class: `card face ${extraClass}`, style, title: def.name },
     h('div', { class: 'card-title' }, def.name || 'Untitled'),

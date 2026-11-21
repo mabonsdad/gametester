@@ -177,6 +177,7 @@ export async function renderRules(root, ctx) {
   function automationEditor() {
     const A = project.automation;
     const T = A.tricks;
+    const S = A.shedding;
     const wrap = h('div', {});
     const summary = h('ul', { class: 'auto-list' });
     const refreshSummary = () => summary.replaceChildren(...describeAutomation(project).map((l) => h('li', { class: l.startsWith('  ') ? 'sub' : '' }, l.trim())));
@@ -222,6 +223,22 @@ export async function renderRules(root, ctx) {
             box(T, 'redeal', 'Re-deal and score each hand (otherwise the game ends when hands are empty)')),
           missing.length ? h('p', { class: 'warn-box small' }, `${missing.length} card type(s) have no "${T.suitStat}" and "${T.rankStat}" stats (e.g. ${missing.slice(0, 3).map((c) => c.name).join(', ')}). Add them in the Cards tab - or use "Standard deck" there.`) : null,
           h('p', { class: 'muted small' }, 'Setup steps (apart from counter steps) run again at the start of every hand, after all cards are gathered back into the pack.')) : null,
+        A.style === 'shedding' ? h('fieldset', { class: 'image-set' }, h('legend', {}, 'Shedding (match & discard)'),
+          h('div', { class: 'grid-3' },
+            field('Draw pile', sel(S, 'drawZone', shared)),
+            field('Discard pile', sel(S, 'discardZone', shared)),
+            box(S, 'playDrawn', 'A drawn card may be played straight away')),
+          h('div', { class: 'grid-3' },
+            field('Colour = card stat', txt(S, 'colourStat', { class: 'mono' })),
+            field('Value = card stat', txt(S, 'valueStat', { class: 'mono' })),
+            field('Effect = card stat', txt(S, 'effectStat', { class: 'mono' }))),
+          h('div', { class: 'grid-3' },
+            field('Colour of wild cards', txt(S, 'wildColour', { placeholder: 'e.g. Wild' })), h('span'), h('span')),
+          h('p', { class: 'muted small' }, 'Effects are words in the effect stat, separated by spaces: skip, reverse, wild, draw:N (e.g. "wild draw:4"). Cards whose colour is the wild colour are wild too. Setup steps (apart from counter steps) re-run every round; put a "move 1 card to the discard pile" step after dealing to turn up the starting card.'),
+          (() => {
+            const missing = project.cards.filter((c) => c.stats?.[S.colourStat] == null || c.stats?.[S.valueStat] == null);
+            return missing.length ? h('p', { class: 'warn-box small' }, `${missing.length} card type(s) have no "${S.colourStat}" or "${S.valueStat}" stat (e.g. ${missing.slice(0, 3).map((c) => c.name).join(', ')}).`) : null;
+          })()) : null,
 
         h('div', {},
           h('span', { class: 'field-label' }, 'Scoring rules'),
