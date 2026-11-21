@@ -5,7 +5,9 @@
 // list. The AI answers with a JSON list of primitive engine actions.
 
 import * as api from './api.js';
-import { activePlayer, cardDef, isVisibleTo, player, resolveZone } from './engine.js';
+import {
+  activePlayer, automation, cardDef, describeAutomation, isTricks, isVisibleTo, legalMoves, player, resolveZone, teamOf,
+} from './engine.js';
 import { zoneDef } from './model.js';
 
 export const CONTROLLERS = {
@@ -42,21 +44,24 @@ export function buildSystemPrompt(project) {
   const auto = t.drawAtStart?.count > 0 ? `At the start of each turn the harness automatically draws ${t.drawAtStart.count} card(s) from "${t.drawAtStart.from}" for the active player (already done when you are asked to act).` : '';
   const zones = project.zones.map((z) => `- ${z.id}: ${z.name} (${z.scope === 'player' ? 'one per player' : 'shared'}, ${z.layout}${z.visibility === 'owner' ? ', private to its owner' : ''})`).join('\n');
   const counters = project.counters.map((c) => `- ${c.id}: ${c.name} (starts at ${c.start})`).join('\n');
-  return `You are an AI play-tester controlling one seat in a prototype card game running in a test harness.
-Play to win according to the rules, the way a thoughtful human player would. The rules may be incomplete or ambiguous: choose a sensible interpretation, keep playing, and mention the problem in "designerNotes".
-The harness does NOT enforce rules. You must apply them yourself, including scoring by changing counters and ending the game when the rules say so.
-
-# Game: ${project.name}
-${project.description || ''}
-${sec('Overview', r.overview)}${sec('Objective', r.objective)}${sec('Turn structure', [phases, auto].filter(Boolean).join('\n'))}${sec('Turn rules', r.turnRules)}${sec('End of game', r.endGame)}${sec('Scoring', r.scoring)}${sec('Strategy hints', r.aiHints)}
-## Zones
-${zones}
-${counters ? `\n## Counters (per player)\n${counters}\n` : ''}
-## Card list (every card type in the game)
-${project.cards.map(cardLine).join('\n') || '(no cards defined)'}
-
-# How to respond
-Reply with ONE JSON object and nothing else:
+  const A = automation(project);
+  const tricks = isTricks(project);
+  const harness = tricks
+    ? 'The harness runs the mechanics listed under "Automated by the harness": it checks that your card is legal, passes the turn, decides who wins each trick, deals new hands' + (A.autoScore ? ', keeps the score' : '') + ' and ends the game. You only choose which card to play.'
+    : A.autoScore && A.scoring.length
+      ? 'The harness keeps the score using the rules under "Automated by the harness" - do not change those counters yourself. Apply all other rules yourself.'
+      : 'The harness does NOT enforce rules. You must apply them yourself, including scoring by changing counters and ending the game when the rules say so.';
+  const respond = tricks
+    ? `Reply with ONE JSON object and nothing else:
+{
+  "reasoning": "1-3 sentences: why this card",
+  "actions": [ {"type":"move","card":"<one of your LEGAL card ids>","to":"${A.tricks.zone}"} ],
+  "winConfidence": 0-100,   // honest estimate that you (your partnership, if any) will win the game from here
+  "experience": "one sentence on how this turn felt from your seat (interesting choice? forced? already lost?)",
+  "designerNotes": "rule ambiguities or design problems you noticed, or empty string"
+}
+Play exactly one card, chosen from the "Legal cards" list in the state. Do not send endTurn, draw or counter actions.`
+    : `Reply with ONE JSON object and nothing else:
 {
   "reasoning": "1-3 sentences: what you are doing this turn and why",
   "actions": [ ...action objects, ending with {"type":"endTurn"} unless you ended the game... ],
@@ -66,6 +71,22 @@ Reply with ONE JSON object and nothing else:
 }
 ${ACTION_DOC}
 You may only move cards you can see (your own private zones, face-up public cards) or the top card of a pile.`;
+  const automated = describeAutomation(project).join('\n');
+  return `You are an AI play-tester controlling one seat in a prototype card game running in a test harness.
+Play to win according to the rules, the way a thoughtful human player would. The rules may be incomplete or ambiguous: choose a sensible interpretation, keep playing, and mention the problem in "designerNotes".
+${harness}
+
+# Game: ${project.name}
+${project.description || ''}
+${sec('Automated by the harness', automated)}${sec('Overview', r.overview)}${sec('Objective', r.objective)}${sec('Turn structure', [phases, auto].filter(Boolean).join('\n'))}${sec('Turn rules', r.turnRules)}${sec('End of game', r.endGame)}${sec('Scoring', r.scoring)}${sec('Strategy hints', r.aiHints)}
+## Zones
+${zones}
+${counters ? `\n## Counters (per player)\n${counters}\n` : ''}
+## Card list (every card type in the game)
+${project.cards.map(cardLine).join('\n') || '(no cards defined)'}
+
+# How to respond
+${respond}`;
 }
 
 function describeZone(project, st, zid, viewer) {
@@ -94,8 +115,24 @@ export function buildUserPrompt(project, st, pid) {
   const mine = st.zoneOrder.filter((z) => st.zones[z].owner === pid);
   const others = st.zoneOrder.filter((z) => st.zones[z].owner && st.zones[z].owner !== pid);
   const recent = st.log.slice(-25).map((e) => `[t${e.turn}] ${e.publicText}`).join('\n');
+  const nm = (u) => `${u} "${cardDef(project, st, u)?.name}"`;
+  let trickInfo = '';
+  if (isTricks(project) && st.hand) {
+    const H = st.hand;
+    const lm = legalMoves(project, st, pid);
+    const team = teamOf(st, pid);
+    const tally = st.players.map((p) => `${p.name} ${H.tricksWon[p.id] || 0}`).join(', ');
+    trickInfo = `
+Hand ${H.number}. Dealer: ${st.players[st.dealer].name}. Trumps: ${H.trump || 'none'}${H.trumpCard ? ` (turned-up card ${nm(H.trumpCard)}, held by the dealer)` : ''}.
+${team ? `Your partnership: ${team.name}.\n` : ''}Tricks won this hand: ${tally}${st.teams.length ? ` | ${st.teams.map((t) => `${t.name}: ${t.players.reduce((a, id) => a + (H.tricksWon[id] || 0), 0)}`).join(', ')}` : ''}.
+Current trick${H.led ? ` (${H.led} led)` : ''}: ${H.trick.length ? H.trick.map((t) => `${player(st, t.pid).name} played ${nm(t.card)}`).join('; ') : 'empty - you are leading'}.
+${st.lastTrick ? `Last trick: won by ${player(st, st.lastTrick.winner).name} (${st.lastTrick.plays.map((t) => `${player(st, t.pid).name} ${nm(t.card)}`).join(', ')}).\n` : ''}
+${lm.summary}
+Legal cards (choose one): ${lm.legal.map(nm).join(', ')}
+`;
+  }
   return `You are ${pid} "${me.name}". It is turn ${st.turn.number}, your turn. Current phase: ${phases[st.turn.phase]?.name || '(none)'}.
-
+${trickInfo}
 Players in turn order:
 ${order}
 
@@ -114,8 +151,9 @@ ${recent}
 Decide your whole turn now and reply with the JSON object.`;
 }
 
-export function buildPrompt(project, st, pid) {
-  return { system: buildSystemPrompt(project), user: buildUserPrompt(project, st, pid) };
+export function buildPrompt(project, st, pid, feedback = '') {
+  const user = buildUserPrompt(project, st, pid) + (feedback ? `\n\nIMPORTANT - your previous answer was rejected: ${feedback}\nChoose again, following the rules.` : '');
+  return { system: buildSystemPrompt(project), user };
 }
 
 // --------------------------------------------------------------- parsing
@@ -151,6 +189,11 @@ export function checkAction(project, st, pid, a) {
 // Not a real player: it just exercises the plumbing. Plays a random hand card
 // to a random shared spread zone (or discard), otherwise draws.
 export function randomBot(project, st, pid) {
+  const lm = legalMoves(project, st, pid);
+  if (lm) {
+    const card = lm.legal[Math.floor(Math.random() * lm.legal.length)];
+    return { reasoning: 'Random legal card (smoke test).', actions: card ? [{ type: 'move', card, to: lm.target }] : [], winConfidence: null, experience: '', designerNotes: '' };
+  }
   const hand = st.zones[`${pid}.hand`]?.cards || [];
   const targets = st.zoneOrder.filter((z) => !st.zones[z].owner && zoneDef(project, st.zones[z].defId)?.layout === 'spread');
   const discard = st.zoneOrder.find((z) => !st.zones[z].owner && zoneDef(project, st.zones[z].defId)?.faceUp && zoneDef(project, st.zones[z].defId)?.layout === 'stack');
@@ -170,9 +213,9 @@ export function randomBot(project, st, pid) {
 // Returns raw text (or an object for the random bot). `ui` supplies hooks for
 // the interactive providers: ui.manual(prompt) -> Promise<text>,
 // ui.waiting(message, cancelFn), and a `signal` {cancelled}.
-export async function requestTurn(project, st, ui) {
+export async function requestTurn(project, st, ui, feedback = '') {
   const p = activePlayer(st);
-  const prompt = buildPrompt(project, st, p.id);
+  const prompt = buildPrompt(project, st, p.id, feedback);
   switch (p.controller) {
     case 'ai-random':
       return { parsed: randomBot(project, st, p.id), prompt };

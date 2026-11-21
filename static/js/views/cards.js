@@ -1,6 +1,6 @@
 // Card designer: list of card types + editor with live preview.
 import * as api from '../api.js';
-import { blankCard, uid } from '../model.js';
+import { blankCard, standardDeck, uid } from '../model.js';
 import { cardBack, cardFace, confirmDialog, field, h, modal, readImageFile, toast } from '../ui.js';
 
 export async function renderCards(root, ctx) {
@@ -20,6 +20,7 @@ export async function renderCards(root, ctx) {
         h('div', { class: 'row gap wrap' },
           h('button', { class: 'btn primary small', onclick: addCard }, '+ New card'),
           h('button', { class: 'btn small', onclick: quickAdd }, 'Quick add list…'),
+          h('button', { class: 'btn small', onclick: addStandardDeck, title: '52 playing cards with suit and rank stats' }, 'Standard deck…'),
           h('button', { class: 'btn small', onclick: editBack }, 'Card back…'))),
       search,
       listEl),
@@ -154,6 +155,28 @@ export async function renderCards(root, ctx) {
             n++;
           }
           if (n) { ctx.changed(); drawList(); drawEditor(); toast(`Added ${n} card type(s)`); }
+        },
+      },
+    ]);
+  }
+
+  function addStandardDeck() {
+    const aceLow = h('input', { type: 'checkbox' });
+    const jokers = h('input', { type: 'number', min: 0, max: 4, value: 0 });
+    modal('Add a standard deck', h('div', { class: 'stack' },
+      h('p', { class: 'muted' }, '52 cards (A♠ … 2♣) with stats "suit" (Spades/Hearts/Diamonds/Clubs) and "rank" (2-14, ace high), ready for trick-taking rules.'),
+      h('label', { class: 'inline' }, aceLow, ' Aces low (rank 1)'),
+      field('Jokers', jokers)), [
+      { label: 'Cancel' },
+      {
+        label: 'Add 52 cards', kind: 'primary', onClick: () => {
+          const existing = new Set(project.cards.map((c) => c.id));
+          const cards = standardDeck(project, { aceLow: aceLow.checked, jokers: parseInt(jokers.value, 10) || 0 })
+            .map((c) => (existing.has(c.id) ? { ...c, id: uid('k_') } : c));
+          project.cards.push(...cards);
+          selectedId = cards[0]?.id || selectedId;
+          ctx.changed(); drawList(); drawEditor();
+          toast(`Added ${cards.length} card types`);
         },
       },
     ]);

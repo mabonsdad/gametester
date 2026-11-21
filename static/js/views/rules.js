@@ -1,7 +1,9 @@
 // Rules & setup editor: players, zones, counters, setup steps, turn
 // structure, and the free-text rulebook that the AI players read.
 import { buildSystemPrompt } from '../ai.js';
-import { LAYOUTS, SETUP_OPS, slug } from '../model.js';
+import { FORMULA_HELP, describeAutomation } from '../engine.js';
+import { check } from '../expr.js';
+import { END_AT, ENFORCE, LAYOUTS, SCORE_EVENTS, SCORE_WHO, SETUP_OPS, STYLES, slug } from '../model.js';
 import { field, h, modal } from '../ui.js';
 
 export async function renderRules(root, ctx) {
@@ -59,6 +61,8 @@ export async function renderRules(root, ctx) {
       section('Setup', 'Run in order when a new game starts. Cards first go to their "Starts in" zone (set per card).', setupList()),
 
       section('Turn structure', null, turnEditor()),
+
+      section('Automation: legal moves & scoring', 'Optional. Let the test bench check which moves are allowed, keep the score and end the game, so testers and AI players can concentrate on playing.', automationEditor()),
 
       section('Rulebook', 'Write it as you would for a new player. AI seats receive all of this plus the card list.', h('div', { class: 'stack' },
         field('Overview / theme', area(project.rules, 'overview', 3, 'What is the game about?')),
@@ -168,6 +172,91 @@ export async function renderRules(root, ctx) {
           select(t.drawAtStart, 'from', zoneOptions((z) => z.scope === 'shared')))),
       ),
       h('div', {}, h('span', { class: 'field-label' }, 'Phases'), phasesWrap));
+  }
+
+  function automationEditor() {
+    const A = project.automation;
+    const T = A.tricks;
+    const wrap = h('div', {});
+    const summary = h('ul', { class: 'auto-list' });
+    const refreshSummary = () => summary.replaceChildren(...describeAutomation(project).map((l) => h('li', { class: l.startsWith('  ') ? 'sub' : '' }, l.trim())));
+    const changed = () => { ctx.changed(); refreshSummary(); };
+    const sel = (obj, key, options, after) => h('select', {
+      value: obj[key] ?? '',
+      onchange: (e) => { obj[key] = e.target.value; changed(); after?.(); },
+    }, Object.entries(options).map(([v, l]) => h('option', { value: v }, l)));
+    const txt = (obj, key, attrs = {}) => h('input', { type: 'text', value: obj[key] ?? '', ...attrs, oninput: (e) => { obj[key] = e.target.value; changed(); } });
+    const box = (obj, key, label) => h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: !!obj[key], onchange: (e) => { obj[key] = e.target.checked; changed(); } }), ' ', label);
+    const formula = (obj, key, placeholder) => {
+      const err = h('small', { class: 'formula-err' }, obj[key] ? check(obj[key]) : '');
+      return h('div', { class: 'formula' },
+        h('input', { type: 'text', class: 'mono', value: obj[key] || '', placeholder, oninput: (e) => { obj[key] = e.target.value; err.textContent = e.target.value.trim() ? check(e.target.value) : ''; changed(); } }),
+        err);
+    };
+    const counters = () => Object.fromEntries(project.counters.map((c) => [c.id, c.name]));
+    const remove = (arr, i) => h('button', { class: 'icon-btn danger', title: 'Remove', onclick: () => { arr.splice(i, 1); changed(); redraw(); } }, '✕');
+    const shared = Object.fromEntries(project.zones.filter((z) => z.scope === 'shared').map((z) => [z.id, z.name]));
+    const perPlayer = { '': '(back to the pack)', ...Object.fromEntries(project.zones.filter((z) => z.scope === 'player' && z.id !== 'hand').map((z) => [z.id, z.name])) };
+
+    function build() {
+      const tricks = A.style === 'tricks';
+      const missing = tricks ? project.cards.filter((c) => c.stats?.[T.suitStat] == null || c.stats?.[T.rankStat] == null) : [];
+      return h('div', { class: 'stack' },
+        h('div', { class: 'grid-3' },
+          field('Play style', sel(A, 'style', STYLES, redraw)),
+          field('Legal-move checking', sel(A, 'enforce', ENFORCE)),
+          field('Teams', sel(A, 'teams', { none: 'No teams', partners: 'Partners sit opposite (4 or 6 players)' }))),
+        box(A, 'autoScore', 'Automatic scoring - apply the scoring rules below (untick to show them as guidance only and score by hand)'),
+        tricks ? h('fieldset', { class: 'image-set' }, h('legend', {}, 'Trick-taking'),
+          h('div', { class: 'grid-3' },
+            field('Cards are played to', sel(T, 'zone', shared)),
+            field('Won tricks go to', sel(T, 'wonZone', perPlayer)),
+            field('First lead each hand', sel(T, 'firstLead', { leftOfDealer: "Player to the dealer's left", dealer: 'The dealer' }))),
+          h('div', { class: 'grid-3' },
+            field('Suit = card stat', txt(T, 'suitStat', { class: 'mono' })),
+            field('Rank = card stat (higher wins)', txt(T, 'rankStat', { class: 'mono' })),
+            field('Trumps', sel(T, 'trump', { none: 'No trumps', fixed: 'A fixed suit', lastDealt: "Last card dealt (dealer's) is turned up" }, redraw))),
+          h('div', { class: 'grid-3' },
+            T.trump === 'fixed' ? field('Trump suit', txt(T, 'trumpSuit', { placeholder: 'e.g. Spades' })) : h('span'),
+            box(T, 'followSuit', 'Must follow suit if able'),
+            box(T, 'redeal', 'Re-deal and score each hand (otherwise the game ends when hands are empty)')),
+          missing.length ? h('p', { class: 'warn-box small' }, `${missing.length} card type(s) have no "${T.suitStat}" and "${T.rankStat}" stats (e.g. ${missing.slice(0, 3).map((c) => c.name).join(', ')}). Add them in the Cards tab - or use "Standard deck" there.`) : null,
+          h('p', { class: 'muted small' }, 'Setup steps (apart from counter steps) run again at the start of every hand, after all cards are gathered back into the pack.')) : null,
+
+        h('div', {},
+          h('span', { class: 'field-label' }, 'Scoring rules'),
+          h('table', { class: 'edit-table' },
+            h('thead', {}, h('tr', {}, ['When', 'Who', 'Counter', 'Add (formula)', 'Only if (optional)', 'Note', ''].map((t) => h('th', {}, t)))),
+            h('tbody', {}, A.scoring.map((r, i) => h('tr', {},
+              h('td', {}, sel(r, 'event', SCORE_EVENTS)),
+              h('td', {}, sel(r, 'who', SCORE_WHO)),
+              h('td', {}, sel(r, 'counter', counters())),
+              h('td', {}, formula(r, 'expr', 'e.g. max(0, teamTricks - 6)')),
+              h('td', {}, formula(r, 'when', 'e.g. tricks == 0')),
+              h('td', {}, txt(r, 'label', { placeholder: 'shown in the log' })),
+              h('td', {}, remove(A.scoring, i)))))),
+          h('button', { class: 'btn small', onclick: () => { A.scoring.push({ event: tricks ? 'handEnd' : 'turnEnd', who: 'each', counter: project.counters[0]?.id || '', expr: '', when: '', label: '' }); changed(); redraw(); } }, '+ Add scoring rule')),
+
+        h('div', {},
+          h('span', { class: 'field-label' }, 'Game end'),
+          h('table', { class: 'edit-table' },
+            h('thead', {}, h('tr', {}, ['Check after', 'Game ends when (formula, any player)', 'Winner', 'Note', ''].map((t) => h('th', {}, t)))),
+            h('tbody', {}, A.endWhen.map((r, i) => h('tr', {},
+              h('td', {}, sel(r, 'at', END_AT)),
+              h('td', {}, formula(r, 'expr', 'e.g. score >= 5')),
+              h('td', {}, sel(r, 'winner', { '': 'Players for whom it is true', ...Object.fromEntries(project.counters.map((c) => [c.id, `Highest ${c.name}`])) })),
+              h('td', {}, txt(r, 'label', { placeholder: 'e.g. First to 5 points' })),
+              h('td', {}, remove(A.endWhen, i)))))),
+          h('button', { class: 'btn small', onclick: () => { A.endWhen.push({ at: tricks ? 'handEnd' : 'turnEnd', expr: '', winner: '', label: '' }); changed(); redraw(); } }, '+ Add end condition')),
+
+        h('details', {}, h('summary', {}, 'Formula help'),
+          h('table', { class: 'mini-table' }, h('tbody', {}, FORMULA_HELP.map(([a, b]) => h('tr', {}, h('td', {}, h('code', {}, a)), h('td', {}, b)))))),
+
+        h('div', { class: 'auto-summary' }, h('span', { class: 'field-label' }, 'How the test bench will run this game (AI players read this too)'), summary));
+    }
+    function redraw() { wrap.replaceChildren(build()); refreshSummary(); }
+    redraw();
+    return wrap;
   }
 
   function showPrompt() {

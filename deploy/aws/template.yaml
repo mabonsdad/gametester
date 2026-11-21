@@ -56,14 +56,14 @@ Parameters:
     Default: ""
   ClaudeModel:
     Type: String
-    Default: claude-opus-5-5
+    Default: claude-sonnet-5-5
   OpenAIApiKey:
     Type: String
     NoEcho: true
     Default: ""
   OpenAIModel:
     Type: String
-    Default: gpt-6.2-sol
+    Default: gpt-6-sol
 
 Resources:
   DataBucket:

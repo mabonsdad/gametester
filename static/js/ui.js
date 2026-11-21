@@ -129,6 +129,16 @@ export function cardFace(def, { size, extraClass = '' } = {}) {
     return h('div', { class: `card face full-art ${extraClass}`, style: { ...style, backgroundImage: cssUrl(def.image) }, title: def.name },
       h('div', { class: 'card-title overlay' }, def.name));
   }
+  if ((def.tags || []).includes('playing-card') && !def.image) {
+    const suit = def.stats?.suit;
+    const red = suit === 'Hearts' || suit === 'Diamonds';
+    const symbol = { Spades: '♠', Hearts: '♥', Diamonds: '♦', Clubs: '♣' }[suit] || '★';
+    const index = def.name.replace(/[♠♥♦♣]/g, '');
+    return h('div', { class: `card face playing ${red ? 'red' : ''} ${extraClass}`, style, title: def.description || def.name },
+      h('div', { class: 'pc-corner' }, h('b', {}, index), h('span', {}, symbol)),
+      h('div', { class: 'pc-pip' }, symbol),
+      h('div', { class: 'pc-corner bottom' }, h('b', {}, index), h('span', {}, symbol)));
+  }
   const stats = Object.entries(def.stats || {});
   return h('div', { class: `card face ${extraClass}`, style, title: def.name },
     h('div', { class: 'card-title' }, def.name || 'Untitled'),

@@ -1,7 +1,10 @@
 // Game engine: a rules-agnostic "card table" with an event log.
 //
-// The engine does not enforce game rules (those are free text written by the
-// designer and interpreted by humans or AI). It provides:
+// By default the engine does not enforce game rules (those are free text
+// written by the designer and interpreted by humans or AI). Projects can opt in
+// to automation (project.automation): trick-taking play, legal-move checks,
+// formula-based scoring and end conditions - see the "automation" section.
+// It provides:
 //   * zones (shared or per player) holding ordered cards (last = top)
 //   * primitive actions: move, draw, flip, shuffle, counter, phase, endTurn, endGame, note
 //   * a seeded RNG so a game can be replayed exactly from its seed + actions
@@ -10,7 +13,8 @@
 //
 // State is plain JSON; callers keep snapshots for undo.
 
-import { zoneDef } from './model.js';
+import { END_AT, ENFORCE, SCORE_EVENTS, SCORE_WHO, zoneDef } from './model.js';
+import { run as runExpr } from './expr.js';
 
 // ------------------------------------------------------------------ RNG
 function rand(st) {
@@ -138,6 +142,11 @@ export function createGame(project, { players, seed } = {}) {
     log: [],
     timeline: [],
     assessments: [],
+    teams: [],
+    dealer: 0,
+    hand: null,
+    handsPlayed: 0,
+    lastTrick: null,
     created: Date.now(),
   };
   players.forEach((p, i) => {
@@ -168,6 +177,15 @@ export function createGame(project, { players, seed } = {}) {
     }
   }
   log(st, 'system', 'setup', `New game: ${players.length} players, ${n} cards, seed ${seed}.`);
+  st.teams = makeTeams(project, st);
+  if (st.teams.length) log(st, 'system', 'setup', `Teams: ${st.teams.map((t) => t.name).join(' vs ')}.`);
+  if (isTricks(project)) {
+    st.dealer = project.turn.firstPlayer === 'random'
+      ? Math.floor(rand(st) * st.players.length)
+      : (st.players.length - 1); // so seat 1 (left of the dealer) leads first
+    startHand(project, st, true);
+    return st;
+  }
   for (const step of project.setup || []) {
     try {
       runSetupStep(project, st, step);
@@ -190,12 +208,18 @@ function runSetupStep(project, st, step) {
     if (!from) throw new Error(`no zone "${step.from}"`);
     const targets = zonesFor(st, project, step.to);
     if (!targets.length) throw new Error(`no zone "${step.to}"`);
-    // Deal round-robin starting with the first player, one card at a time.
+    // Deal round-robin one card at a time: from seat 1, or (trick games) from
+    // the player to the dealer's left, so the last card goes to the dealer.
+    if (isTricks(project) && targets.length === st.players.length) {
+      const start = nextSeat(project, st, st.dealer);
+      for (let r = 0; r < start; r++) targets.push(targets.shift());
+    }
     for (let k = 0; k < count; k++) {
       for (const zid of targets) {
         const top = from.cards[from.cards.length - 1];
         if (!top) break;
         placeCard(project, st, top, zid, { faceUp: step.faceUp });
+        if (st.hand) st.hand.lastDealt = top;
       }
     }
     log(st, 'system', 'setup', `${step.op === 'deal' ? 'Dealt' : 'Moved'} ${count} card(s) from ${from.name} to ${targets.length > 1 ? 'each player\'s ' + (zoneDef(project, step.to)?.name || step.to) : zoneLabel(st, targets[0])}.`);
@@ -206,6 +230,7 @@ function runSetupStep(project, st, step) {
 }
 
 function startTurn(project, st) {
+  if (isTricks(project)) return; // trick games advance automatically
   const p = activePlayer(st);
   log(st, 'system', 'turn', `Turn ${st.turn.number}: ${p.name}`);
   const d = project.turn.drawAtStart || {};
@@ -264,6 +289,13 @@ export function apply(project, st, action) {
       const to = resolveZone(st, a.to, actor);
       if (!to) throw new Error(`no zone "${a.to}"`);
       const fromZid = c.zone;
+      if (isTrickPlay(project, st, fromZid, to)) {
+        const owner = st.zones[fromZid].owner;
+        placeCard(project, st, a.card, to, { faceUp: true });
+        log(st, owner, 'play', `${player(st, owner).name} played ${cardName(project, st, a.card)}`, { data: { card: a.card, from: fromZid, to } });
+        playToTrick(project, st, owner, a.card);
+        break;
+      }
       const wasPublic = isPublic(project, st, a.card);
       placeCard(project, st, a.card, to, { faceUp: a.faceUp, position: a.position });
       const nowPublic = isPublic(project, st, a.card);
@@ -318,7 +350,9 @@ export function apply(project, st, action) {
     case 'endTurn': {
       if (st.status !== 'playing') throw new Error('the game has ended');
       log(st, actor, 'endTurn', `${who} ended their turn`);
+      fireScoring(project, st, 'turnEnd', { actor: activePlayer(st).id });
       snapshotTimeline(st);
+      if (checkEnd(project, st, 'turnEnd')) break;
       const n = st.players.length;
       const step = project.turn.direction === 'counterclockwise' ? -1 : 1;
       st.turn.active = (st.turn.active + step + n) % n;
@@ -329,11 +363,7 @@ export function apply(project, st, action) {
     }
     case 'endGame': {
       snapshotTimeline(st);
-      st.status = 'ended';
-      const winners = [].concat(a.winner || []).filter((w) => player(st, w));
-      st.result = { winners, reason: a.reason || '', by: actor, turn: st.turn.number };
-      const names = winners.map((w) => player(st, w).name).join(' & ') || 'no winner recorded';
-      log(st, actor, 'endGame', `Game over (${who}): ${names}${a.reason ? ' - ' + a.reason : ''}`);
+      finishGame(st, [].concat(a.winner || []), a.reason || '', actor);
       break;
     }
     case 'note': {
@@ -357,13 +387,25 @@ export function apply(project, st, action) {
 }
 
 // ------------------------------------------------------------------ analysis helpers
+// Competitors are teams when the game has partnerships, otherwise players.
+export function competitors(st) {
+  return st.teams?.length
+    ? st.teams.map((t) => ({ id: t.id, name: t.name, rep: t.players[0] }))
+    : st.players.map((p) => ({ id: p.id, name: p.name, rep: p.id }));
+}
+
+export function competitorName(st, id) {
+  return st.teams?.find((t) => t.id === id)?.name || player(st, id)?.name || id;
+}
+
 // Leader per timeline entry by a counter, and number of lead changes.
 export function leadStats(st, counterId) {
+  const comps = competitors(st);
   const points = st.timeline.map((t) => {
     let best = null; let bestV = -Infinity; let tie = false;
-    for (const [pid, c] of Object.entries(t.counters)) {
-      const v = c[counterId] ?? 0;
-      if (v > bestV) { best = pid; bestV = v; tie = false; } else if (v === bestV) tie = true;
+    for (const c of comps) {
+      const v = t.counters[c.rep]?.[counterId] ?? 0;
+      if (v > bestV) { best = c.id; bestV = v; tie = false; } else if (v === bestV) tie = true;
     }
     return { turn: t.turn, leader: tie ? null : best, value: bestV };
   });
@@ -376,4 +418,375 @@ export function leadStats(st, counterId) {
     }
   }
   return { points, changes, leader: last, lastChangeTurn };
+}
+
+// ================================================================== automation
+// Optional, per project (project.automation). Free-form projects only use the
+// scoring rules / end conditions on 'turnEnd'; trick-taking projects get the
+// full flow: deal, trumps, follow suit, trick resolution, hand scoring, redeal.
+
+const NO_AUTOMATION = { style: 'free', enforce: 'off', autoScore: false, teams: 'none', scoring: [], endWhen: [], tricks: {} };
+export const automation = (project) => project.automation || NO_AUTOMATION;
+export const isTricks = (project) => automation(project).style === 'tricks';
+
+function statOf(project, st, uid, stat) {
+  return cardDef(project, st, uid)?.stats?.[stat];
+}
+
+function nextSeat(project, st, seat, from = 1) {
+  const n = st.players.length;
+  const step = project.turn.direction === 'counterclockwise' ? -1 : 1;
+  return (((seat + step * from) % n) + n) % n;
+}
+
+export function teamOf(st, pid) {
+  return st.teams?.find((t) => t.players.includes(pid)) || null;
+}
+
+function makeTeams(project, st) {
+  const n = st.players.length;
+  if (automation(project).teams !== 'partners' || n < 4 || n % 2) return [];
+  const k = n / 2;
+  const letters = 'ABC';
+  return Array.from({ length: k }, (_, i) => {
+    const members = [st.players[i], st.players[i + k]];
+    return { id: `t${i + 1}`, name: `Team ${letters[i]} (${members.map((p) => p.name).join(' & ')})`, players: members.map((p) => p.id) };
+  });
+}
+
+function packZone(project, st) {
+  const deal = (project.setup || []).find((s) => s.op === 'deal' && st.zones[s.from]);
+  if (deal) return deal.from;
+  return st.zoneOrder.find((z) => !st.zones[z].owner && zoneDef(project, st.zones[z].defId)?.layout === 'stack') || st.zoneOrder[0];
+}
+
+function isTrickPlay(project, st, fromZid, toZid) {
+  if (!isTricks(project) || st.status !== 'playing' || !st.hand) return false;
+  const from = st.zones[fromZid];
+  const to = st.zones[toZid];
+  return from?.defId === 'hand' && !!from.owner && to?.defId === automation(project).tricks.zone && !to.owner;
+}
+
+function startHand(project, st, first) {
+  const T = automation(project).tricks;
+  if (!first) {
+    const pack = packZone(project, st);
+    for (const uid of Object.keys(st.cards)) {
+      if (st.cards[uid].zone !== pack) placeCard(project, st, uid, pack, { faceUp: false });
+    }
+    st.dealer = nextSeat(project, st, st.dealer);
+  }
+  st.hand = {
+    number: (st.hand?.number || 0) + 1,
+    trick: [],
+    led: null,
+    trump: null,
+    trumpCard: null,
+    tricksWon: Object.fromEntries(st.players.map((p) => [p.id, 0])),
+    tricksPlayed: 0,
+    lastDealt: null,
+  };
+  st.lastTrick = null;
+  log(st, 'system', 'hand', `Hand ${st.hand.number}: ${st.players[st.dealer].name} deals.`);
+  for (const step of project.setup || []) {
+    if (!first && step.op === 'counter') continue; // keep scores between hands
+    try {
+      runSetupStep(project, st, step);
+    } catch (e) {
+      log(st, 'system', 'warning', `Setup step "${step.op}" failed: ${e.message}`);
+    }
+  }
+  if (T.trump === 'fixed' && T.trumpSuit) {
+    st.hand.trump = T.trumpSuit;
+    log(st, 'system', 'trump', `Trumps: ${T.trumpSuit}.`);
+  } else if (T.trump === 'lastDealt' && st.hand.lastDealt) {
+    const uid = st.hand.lastDealt;
+    st.hand.trump = statOf(project, st, uid, T.suitStat) ?? null;
+    st.hand.trumpCard = uid;
+    log(st, 'system', 'trump', `Trumps: ${st.hand.trump} - the last card dealt, ${cardName(project, st, uid)}, is turned up (it belongs to ${st.players[st.dealer].name}).`);
+  } else {
+    log(st, 'system', 'trump', 'No trumps this hand.');
+  }
+  st.turn.active = T.firstLead === 'dealer' ? st.dealer : nextSeat(project, st, st.dealer);
+  st.turn.phase = 0;
+  log(st, 'system', 'turn', `${activePlayer(st).name} leads.`);
+}
+
+function playToTrick(project, st, pid, uid) {
+  const H = st.hand;
+  const T = automation(project).tricks;
+  if (!H.trick.length) H.led = statOf(project, st, uid, T.suitStat) ?? null;
+  H.trick.push({ pid, card: uid });
+  st.turn.number++;
+  if (H.trick.length < st.players.length) {
+    st.turn.active = nextSeat(project, st, player(st, pid).seat);
+    return;
+  }
+  resolveTrick(project, st);
+}
+
+export function trickWinner(project, st, plays, trump) {
+  const T = automation(project).tricks;
+  const suit = (u) => statOf(project, st, u, T.suitStat);
+  const rank = (u) => Number(statOf(project, st, u, T.rankStat)) || 0;
+  let best = plays[0];
+  for (const play of plays.slice(1)) {
+    const bestTrump = !!trump && suit(best.card) === trump;
+    const thisTrump = !!trump && suit(play.card) === trump;
+    if (thisTrump && !bestTrump) best = play;
+    else if (thisTrump === bestTrump && suit(play.card) === suit(best.card) && rank(play.card) > rank(best.card)) best = play;
+  }
+  return best;
+}
+
+function resolveTrick(project, st) {
+  const H = st.hand;
+  const T = automation(project).tricks;
+  const best = trickWinner(project, st, H.trick, H.trump);
+  const winner = best.pid;
+  H.tricksWon[winner] = (H.tricksWon[winner] || 0) + 1;
+  H.tricksPlayed++;
+  const dest = resolveZone(st, T.wonZone, winner) || packZone(project, st);
+  for (const play of H.trick) placeCard(project, st, play.card, dest, { faceUp: false });
+  st.lastTrick = { number: H.tricksPlayed, plays: H.trick, winner, winningCard: best.card, led: H.led };
+  const team = teamOf(st, winner);
+  log(st, 'system', 'trick', `Trick ${H.tricksPlayed} won by ${player(st, winner).name} with ${cardName(project, st, best.card)}${team ? ` - ${team.name}` : ''} (${H.trick.map((p) => cardName(project, st, p.card)).join(', ')}).`);
+  H.trick = [];
+  H.led = null;
+  fireScoring(project, st, 'trickWon', { winner });
+  snapshotTimeline(st);
+  if (checkEnd(project, st, 'trickWon')) return;
+  const handsEmpty = st.players.every((p) => !(st.zones[`${p.id}.hand`]?.cards.length));
+  if (handsEmpty) {
+    endHand(project, st);
+    return;
+  }
+  st.turn.active = player(st, winner).seat;
+  log(st, 'system', 'turn', `${player(st, winner).name} leads trick ${H.tricksPlayed + 1}.`);
+}
+
+function endHand(project, st) {
+  const H = st.hand;
+  const groups = competitors(st).map((c) => {
+    const members = teamOf(st, c.rep)?.players || [c.rep];
+    return `${c.name} ${members.reduce((s, m) => s + (H.tricksWon[m] || 0), 0)}`;
+  });
+  log(st, 'system', 'hand', `Hand ${H.number} over - tricks: ${groups.join(', ')}.`);
+  st.handsPlayed++;
+  fireScoring(project, st, 'handEnd', {});
+  snapshotTimeline(st);
+  if (checkEnd(project, st, 'handEnd')) return;
+  if (automation(project).tricks.redeal) {
+    startHand(project, st, false);
+  } else {
+    const c = project.counters[0]?.id;
+    const best = c ? Math.max(...st.players.map((p) => p.counters[c] ?? 0)) : 0;
+    finishGame(st, c ? st.players.filter((p) => (p.counters[c] ?? 0) === best).map((p) => p.id) : [], 'All cards played', 'system');
+  }
+}
+
+function finishGame(st, winners, reason, by) {
+  st.status = 'ended';
+  winners = winners.filter((w) => player(st, w));
+  st.result = { winners, reason, by, turn: st.turn.number };
+  const names = winners.map((w) => player(st, w).name).join(' & ') || 'no winner recorded';
+  log(st, by, 'endGame', `Game over: ${names}${reason ? ' - ' + reason : ''}`);
+}
+
+// Variables and functions available to scoring/end formulas, from pid's view.
+export function formulaScope(project, st, pid, ctx = {}) {
+  const p = player(st, pid);
+  const H = st.hand;
+  const mates = teamOf(st, pid)?.players || [pid];
+  const tricksOf = (id) => H?.tricksWon?.[id] ?? 0;
+  const zoneCards = (ref) => {
+    const zid = resolveZone(st, ref, pid);
+    return zid ? st.zones[zid].cards : [];
+  };
+  const matches = (uid, stat, value) => stat == null || (value === undefined
+    ? statOf(project, st, uid, stat) != null
+    : String(statOf(project, st, uid, stat)) === String(value));
+  const T = automation(project).tricks;
+  return {
+    ...p.counters,
+    tricks: tricksOf(pid),
+    teamTricks: mates.reduce((s, m) => s + tricksOf(m), 0),
+    handTricks: H?.tricksPlayed ?? 0,
+    hand: H?.number ?? 0,
+    handsPlayed: st.handsPlayed || 0,
+    players: st.players.length,
+    seat: p.seat + 1,
+    turn: st.turn.number,
+    cardsInHand: st.zones[`${pid}.hand`]?.cards.length ?? 0,
+    isWinner: ctx.winner === pid ? 1 : 0,
+    zoneCount: (zone, stat, value) => zoneCards(zone).filter((u) => matches(u, stat, value)).length,
+    zoneSum: (zone, stat) => zoneCards(zone).reduce((s, u) => s + (Number(statOf(project, st, u, stat)) || 0), 0),
+    wonCount: (stat, value) => zoneCards(T.wonZone).filter((u) => matches(u, stat, value)).length,
+    wonSum: (stat) => zoneCards(T.wonZone).reduce((s, u) => s + (Number(statOf(project, st, u, stat)) || 0), 0),
+  };
+}
+
+export const FORMULA_HELP = [
+  ['tricks / teamTricks', 'tricks won this hand by the player / their team'],
+  ['handTricks', 'tricks played so far this hand'],
+  ['hand, handsPlayed', 'current hand number / hands finished'],
+  ['cardsInHand, players, seat, turn', 'as named'],
+  ['any counter id (e.g. score)', "that player's counter"],
+  ['wonCount("suit","Hearts")', 'cards in their tricks-won zone (optionally matching a stat)'],
+  ['wonSum("points")', 'sum of a stat over their tricks-won zone'],
+  ['zoneCount("haul"), zoneSum("haul","number")', 'the same for any zone'],
+  ['max, min, abs, floor, ceil, round', 'functions'],
+  ['+ - * / %   < <= > >= == !=   && || !   a ? b : c', 'operators'],
+];
+
+function fireScoring(project, st, event, ctx) {
+  const A = automation(project);
+  if (!A.autoScore) return;
+  for (const rule of A.scoring || []) {
+    if (rule.event !== event || !rule.counter || !rule.expr) continue;
+    let groups;
+    if (rule.who === 'winner') groups = ctx.winner ? [[ctx.winner]] : [];
+    else if (rule.who === 'winnerTeam') groups = ctx.winner ? [teamOf(st, ctx.winner)?.players || [ctx.winner]] : [];
+    else if (rule.who === 'active') groups = [[ctx.actor || activePlayer(st).id]];
+    else if (rule.who === 'team') groups = st.teams.length ? st.teams.map((t) => t.players) : st.players.map((p) => [p.id]);
+    else groups = st.players.map((p) => [p.id]);
+    for (const g of groups) {
+      try {
+        const vars = formulaScope(project, st, g[0], ctx);
+        if (rule.when && !runExpr(rule.when, vars)) continue;
+        const amount = Number(runExpr(rule.expr, vars)) || 0;
+        if (!amount) continue;
+        let after;
+        for (const pid of g) {
+          const p = player(st, pid);
+          if (!(rule.counter in p.counters)) throw new Error(`no counter "${rule.counter}"`);
+          p.counters[rule.counter] += amount;
+          after = p.counters[rule.counter];
+        }
+        const label = g.length > 1 ? teamOf(st, g[0])?.name : player(st, g[0]).name;
+        const cname = project.counters.find((c) => c.id === rule.counter)?.name || rule.counter;
+        log(st, 'system', 'score', `Score: ${label} ${amount > 0 ? '+' : ''}${amount} ${cname} (${rule.label || rule.expr}) - now ${after}.`,
+          { data: { players: g, counter: rule.counter, amount } });
+      } catch (e) {
+        log(st, 'system', 'note', `⚠ Scoring rule "${rule.label || rule.expr}" failed: ${e.message}`);
+      }
+    }
+  }
+}
+
+function checkEnd(project, st, at) {
+  for (const rule of automation(project).endWhen || []) {
+    if (rule.at !== at || !rule.expr || st.status !== 'playing') continue;
+    let matching;
+    try {
+      matching = st.players.filter((p) => runExpr(rule.expr, formulaScope(project, st, p.id)));
+    } catch (e) {
+      log(st, 'system', 'note', `⚠ End condition "${rule.label || rule.expr}" failed: ${e.message}`);
+      continue;
+    }
+    if (!matching.length) continue;
+    let winners = matching.map((p) => p.id);
+    if (rule.winner) {
+      const best = Math.max(...st.players.map((p) => p.counters[rule.winner] ?? 0));
+      winners = st.players.filter((p) => (p.counters[rule.winner] ?? 0) === best).map((p) => p.id);
+    }
+    finishGame(st, winners, rule.label || rule.expr, 'system');
+    return true;
+  }
+  return false;
+}
+
+// ------------------------------------------------------------------ legal moves
+// For trick games: which cards in pid's hand may be played now, and why not.
+// Returns null when the project has no move restrictions (free-form).
+export function legalMoves(project, st, pid) {
+  if (!isTricks(project) || st.status !== 'playing' || !st.hand) return null;
+  const T = automation(project).tricks;
+  const active = activePlayer(st);
+  const hand = st.zones[`${pid}.hand`]?.cards || [];
+  const out = { pid, target: resolveZone(st, T.zone, pid), cards: {}, legal: [], summary: '' };
+  if (pid !== active.id) {
+    for (const u of hand) out.cards[u] = `Wait - it is ${active.name}'s turn.`;
+    out.summary = `Waiting for ${active.name}.`;
+    return out;
+  }
+  const led = st.hand.led;
+  const suit = (u) => statOf(project, st, u, T.suitStat);
+  const canFollow = T.followSuit && led != null && hand.some((u) => suit(u) === led);
+  for (const u of hand) {
+    const ok = !canFollow || suit(u) === led;
+    out.cards[u] = ok ? '' : `You must follow suit: play a ${led} card.`;
+    if (ok) out.legal.push(u);
+  }
+  const trumpNote = st.hand.trump ? ` (a ${st.hand.trump} card would trump it)` : '';
+  out.summary = led == null
+    ? 'Lead any card to start the trick.'
+    : canFollow ? `Follow suit: play a ${led} card.` : `You have no ${led}: play any card${trumpNote}.`;
+  return out;
+}
+
+// Why an action breaks the automated rules, or null if it is fine.
+// Only actions by players are checked; 'designer' and 'system' never are.
+export function checkAction(project, st, action) {
+  const A = automation(project);
+  if (A.enforce === 'off' || st.status !== 'playing') return null;
+  const actor = action.actor || activePlayer(st).id;
+  if (!player(st, actor)) return null;
+  if (!isTricks(project)) return null;
+  const T = A.tricks;
+  const trickName = zoneDef(project, T.zone)?.name || 'trick';
+  switch (action.type) {
+    case 'move': {
+      const c = st.cards[action.card];
+      if (!c) return null;
+      const from = st.zones[c.zone];
+      const to = resolveZone(st, action.to, actor);
+      if (!(from.defId === 'hand' && to && st.zones[to].defId === T.zone)) {
+        return `In this game you only play cards from your hand to the ${trickName}; everything else is automatic.`;
+      }
+      if (from.owner !== actor) return `That card is in ${player(st, from.owner)?.name}'s hand, not ${player(st, actor).name}'s.`;
+      return legalMoves(project, st, actor).cards[action.card] || null;
+    }
+    case 'endTurn': return 'No need: the turn passes automatically when a card is played.';
+    case 'draw': case 'flip': case 'shuffle': case 'phase':
+      return `"${action.type}" is not part of this game - play a card to the ${trickName}.`;
+    case 'counter': return A.autoScore ? 'Scoring is automatic in this game.' : null;
+    default: return null;
+  }
+}
+
+// ------------------------------------------------------------------ plain-English summary
+export function describeAutomation(project) {
+  const A = automation(project);
+  const T = A.tricks || {};
+  const zname = (id) => zoneDef(project, id)?.name || id;
+  const cname = (id) => project.counters.find((c) => c.id === id)?.name || id;
+  const lines = [];
+  if (A.style === 'tricks') {
+    lines.push(`Trick-taking: on your turn, play one card from your hand to the ${zname(T.zone)}. When everyone has played, the trick is won by the highest card${T.wonZone ? ` and goes face down to the winner's "${zname(T.wonZone)}"` : ''}. The winner leads the next trick.`);
+    lines.push(T.followSuit
+      ? `Follow suit: you must play the suit that was led if you can (suit = card stat "${T.suitStat}"; higher "${T.rankStat}" wins).`
+      : `Any card may be played (suit = card stat "${T.suitStat}"; higher "${T.rankStat}" wins).`);
+    lines.push({
+      none: 'No trumps.',
+      fixed: `${T.trumpSuit || '(no suit set)'} are trumps: a trump beats any card of another suit.`,
+      lastDealt: 'Trumps: the last card dealt (to the dealer) is turned up; its suit is trumps for that hand. A trump beats any card of another suit.',
+    }[T.trump] || 'No trumps.');
+    lines.push(T.firstLead === 'dealer' ? 'The dealer leads the first trick of each hand.' : "The player to the dealer's left leads the first trick of each hand.");
+    lines.push(T.redeal ? 'When the hands are empty the hand is scored, the deal passes to the left and the cards are re-dealt.' : 'When the hands are empty the game ends.');
+  } else {
+    lines.push('Free-form: players (or AI seats) move cards and apply the rules themselves.');
+  }
+  if (A.teams === 'partners') lines.push('Partnerships: players sitting opposite each other are a team (with 4 players, seats 1 & 3 against seats 2 & 4).');
+  lines.push(`Legal-move checking: ${ENFORCE[A.enforce] || A.enforce}${A.style === 'free' ? ' (free-form games have no move restrictions)' : ''}.`);
+  if (A.scoring?.length) {
+    lines.push(A.autoScore ? 'Scoring is automatic:' : 'Scoring rules (NOT automated - update counters by hand):');
+    for (const r of A.scoring) {
+      lines.push(`  • When ${SCORE_EVENTS[r.event] || r.event}, ${SCORE_WHO[r.who] || r.who} adds ${r.expr} to ${cname(r.counter)}${r.when ? ` if ${r.when}` : ''}${r.label ? ` - "${r.label}"` : ''}.`);
+    }
+  }
+  for (const r of A.endWhen || []) {
+    lines.push(`Game end: checked after ${END_AT[r.at] || r.at}; ends when ${r.expr} is true for any player. ${r.winner ? `The highest ${cname(r.winner)} wins.` : 'Those players win.'}${r.label ? ` ("${r.label}")` : ''}`);
+  }
+  return lines;
 }
