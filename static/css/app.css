@@ -284,3 +284,39 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; }
 /* ---------- login */
 .login-box { max-width: 380px; margin: 60px auto; display: flex; flex-direction: column; gap: 12px; }
 .login-box input { width: 100%; }
+
+/* ---------- playing cards */
+.card.face.playing { color: #1d1d1d; background: #fdfcf8; padding: .3em .35em; justify-content: center; align-items: center; }
+.card.face.playing.red { color: #c0262d; }
+.pc-corner { position: absolute; top: .35em; left: .4em; display: flex; flex-direction: column; align-items: center; line-height: 1; font-size: 1.5em; }
+.pc-corner b { font-weight: 700; }
+.pc-corner span { font-size: .85em; }
+.pc-corner.bottom { top: auto; left: auto; bottom: .35em; right: .4em; transform: rotate(180deg); }
+.pc-pip { font-size: 4.2em; line-height: 1; }
+
+/* ---------- legal moves & tricks */
+.table-card.legal { outline: 3px solid #2e9d5b; outline-offset: 1px; }
+.table-card.illegal { filter: grayscale(.7) brightness(.82); opacity: .75; }
+.table-card.legal.selected { outline-color: var(--active); }
+.trick-zone .cards { gap: 10px; }
+.trick-play { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.trick-who { font-size: 11px; background: rgba(0,0,0,.35); color: #fff; padding: 0 6px; border-radius: 99px; }
+.team-chip, .dealer-chip { font-size: 10px; padding: 1px 6px; border-radius: 99px; text-transform: uppercase; letter-spacing: .04em; }
+.team-chip.t1 { background: #dbe8f7; color: #1f4f86; } .team-chip.t2 { background: #f7e1d8; color: #8a3a1c; } .team-chip.t3 { background: #e0f0dc; color: #2d6a27; }
+.dealer-chip { background: #fff1c7; color: #6b4b00; }
+.trick-facts { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.trick-facts .trump { font-weight: 700; } .trick-facts .trump.red { color: #c0262d; }
+.you-can { background: color-mix(in srgb, #2e9d5b 12%, var(--surface)); border-left: 3px solid #2e9d5b; padding: 6px 8px; border-radius: 4px; font-size: 13px; }
+.last-trick { color: var(--ink-2); }
+.play-box { display: flex; flex-direction: column; gap: 6px; }
+.referee summary { cursor: pointer; color: var(--ink-2); font-size: 13px; margin: 6px 0; }
+.auto-list { padding-left: 18px; margin: 0 0 8px; font-size: 13px; }
+.auto-list li.sub { list-style: none; margin-left: -4px; }
+
+/* ---------- automation editor */
+.formula { display: flex; flex-direction: column; gap: 2px; min-width: 170px; }
+.formula-err { color: var(--danger); font-size: 11px; }
+.auto-summary { background: var(--surface-2); border-radius: 6px; padding: 10px 12px; }
+
+.seat .zone.layout-hand .cards.many > .card + .card { margin-left: calc(var(--cw) * -.64); }
+.seat.side-left .zone.layout-hand .cards.many > .card + .card, .seat.side-right .zone.layout-hand .cards.many > .card + .card { margin-left: calc(var(--cw) * -.78); }

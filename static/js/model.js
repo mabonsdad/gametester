@@ -22,6 +22,45 @@ export const SETUP_OPS = {
   counter: 'Set a counter for every player',
 };
 
+// Optional rules automation. 'free' style = sandbox table (the original
+// behaviour); 'tricks' = trick-taking engine (follow suit, trumps, tricks).
+// Scoring rules and end conditions use formulas (see expr.js) and work in
+// either style.
+export const STYLES = {
+  free: 'Free-form: any card can go anywhere; players apply the rules',
+  tricks: 'Trick-taking: play one card to a trick; highest wins (Whist, Hearts, Spades…)',
+};
+export const ENFORCE = {
+  off: 'Off - no checks',
+  warn: 'Warn - allow, but log a warning',
+  strict: 'Strict - block illegal moves',
+};
+export const SCORE_EVENTS = { trickWon: 'a trick is won', handEnd: 'a hand ends', turnEnd: 'a turn ends' };
+export const SCORE_WHO = { each: 'each player', team: 'each team', winner: 'the trick winner', winnerTeam: "the trick winner's team", active: 'the player whose turn ended' };
+export const END_AT = { handEnd: 'each hand', trickWon: 'each trick', turnEnd: 'each turn' };
+
+export function defaultAutomation() {
+  return {
+    style: 'free',
+    enforce: 'warn',
+    autoScore: true,
+    teams: 'none',
+    tricks: {
+      zone: 'trick',
+      wonZone: 'won',
+      suitStat: 'suit',
+      rankStat: 'rank',
+      followSuit: true,
+      trump: 'none', // none | fixed | lastDealt
+      trumpSuit: '',
+      firstLead: 'leftOfDealer', // leftOfDealer | dealer
+      redeal: true,
+    },
+    scoring: [], // { event, who, counter, expr, when, label }
+    endWhen: [], // { at, expr, winner: '' (players matching) | counter id (highest) , label }
+  };
+}
+
 export function defaultZones() {
   return [
     { id: 'deck', name: 'Draw pile', scope: 'shared', layout: 'stack', faceUp: false, visibility: 'public' },
@@ -67,6 +106,7 @@ export function blankProject(name = 'Untitled game') {
       scoring: '',
       aiHints: '',
     },
+    automation: defaultAutomation(),
     cards: [],
   };
 }
@@ -96,6 +136,13 @@ export function normalizeProject(p) {
   out.turn = { ...base.turn, ...(p.turn || {}) };
   out.turn.drawAtStart = { ...base.turn.drawAtStart, ...(out.turn.drawAtStart || {}) };
   out.rules = { ...base.rules, ...(p.rules || {}) };
+  const A = p.automation || {};
+  out.automation = {
+    ...base.automation, ...A,
+    tricks: { ...base.automation.tricks, ...(A.tricks || {}) },
+    scoring: Array.isArray(A.scoring) ? A.scoring : [],
+    endWhen: Array.isArray(A.endWhen) ? A.endWhen : [],
+  };
   out.zones = Array.isArray(p.zones) && p.zones.length ? p.zones : base.zones;
   if (!out.zones.some((z) => z.id === 'hand')) out.zones.push(defaultZones()[3]);
   out.counters = Array.isArray(p.counters) ? p.counters : base.counters;
@@ -179,5 +226,84 @@ export function sampleProject() {
     rules: 'Every card in the Harbour goes to the Wreckage. Score 1.', count: 2, color: '#a9b4c2',
     stats: {}, tags: ['special'],
   });
+  return p;
+}
+
+// ------------------------------------------------------------------ playing cards
+export const SUITS = [
+  { name: 'Spades', symbol: '♠', red: false },
+  { name: 'Hearts', symbol: '♥', red: true },
+  { name: 'Diamonds', symbol: '♦', red: true },
+  { name: 'Clubs', symbol: '♣', red: false },
+];
+const RANK_NAMES = { 11: ['J', 'Jack'], 12: ['Q', 'Queen'], 13: ['K', 'King'], 14: ['A', 'Ace'], 1: ['A', 'Ace'] };
+
+// A standard deck as card definitions with stats { suit, rank } (rank 2-14,
+// ace high unless aceLow). Tagged 'playing-card' for the classic card face.
+export function standardDeck(project, { aceLow = false, jokers = 0 } = {}) {
+  const cards = [];
+  const start = project.zones.find((z) => z.scope === 'shared' && z.layout === 'stack')?.id || 'deck';
+  for (const s of SUITS) {
+    for (let r = 2; r <= 14; r++) {
+      const rank = aceLow && r === 14 ? 1 : r;
+      const [short, long] = RANK_NAMES[rank] || [String(rank), String(rank)];
+      cards.push({
+        ...blankCard(project), id: `k_${short.toLowerCase()}${s.name[0].toLowerCase()}`,
+        name: `${short}${s.symbol}`, description: `${long} of ${s.name}`, count: 1, startZone: start,
+        color: '#fdfcf8', stats: { suit: s.name, rank }, tags: ['playing-card'],
+      });
+    }
+  }
+  if (jokers > 0) {
+    cards.push({ ...blankCard(project), id: 'k_joker', name: 'Joker', description: 'Joker', count: jokers, startZone: start, color: '#fdfcf8', stats: { suit: 'Joker', rank: 15 }, tags: ['playing-card'] });
+  }
+  return cards;
+}
+
+export function whistProject() {
+  const p = blankProject('Whist (classic)');
+  p.description = 'Classic short whist for four players in two partnerships. Included to show legal-move checking and automatic scoring.';
+  p.players = { min: 4, max: 4, default: 4 };
+  p.cardBack = { color: '#7a2531', image: null, label: 'WHIST' };
+  p.zones = [
+    { id: 'deck', name: 'Pack', scope: 'shared', layout: 'stack', faceUp: false, visibility: 'public' },
+    { id: 'trick', name: 'Trick', scope: 'shared', layout: 'spread', faceUp: true, visibility: 'public' },
+    { id: 'hand', name: 'Hand', scope: 'player', layout: 'hand', faceUp: true, visibility: 'owner', builtin: true },
+    { id: 'won', name: 'Tricks won', scope: 'player', layout: 'stack', faceUp: false, visibility: 'public' },
+  ];
+  p.counters = [{ id: 'score', name: 'Points', start: 0 }];
+  p.setup = [
+    { op: 'shuffle', zone: 'deck' },
+    { op: 'deal', from: 'deck', to: 'hand', count: 13 },
+  ];
+  p.turn = { phases: [], drawAtStart: { count: 0, from: 'deck' }, firstPlayer: 'seat1', direction: 'clockwise' };
+  p.automation = {
+    ...defaultAutomation(),
+    style: 'tricks',
+    enforce: 'strict',
+    autoScore: true,
+    teams: 'partners',
+    tricks: { ...defaultAutomation().tricks, trump: 'lastDealt', firstLead: 'leftOfDealer', redeal: true },
+    scoring: [
+      { event: 'handEnd', who: 'team', counter: 'score', expr: 'max(0, teamTricks - 6)', when: '', label: 'One point per trick over six' },
+    ],
+    endWhen: [
+      { at: 'handEnd', expr: 'score >= 5', winner: '', label: 'First partnership to 5 points' },
+    ],
+  };
+  p.rules = {
+    overview: 'Four players in two partnerships; partners sit opposite each other (seats 1 & 3 against seats 2 & 4). All 52 cards are dealt, 13 each.',
+    objective: 'Be the first partnership to score 5 points.',
+    turnRules:
+      'Trumps: the last card dealt (it goes to the dealer) is shown to everyone; its suit is trumps for the hand.\n' +
+      'The player to the dealer\'s left leads to the first trick. Each player in turn, clockwise, plays one card.\n' +
+      'You MUST follow the suit that was led if you can. If you cannot, you may play any card, including a trump.\n' +
+      'The trick is won by the highest trump played, or if no trump was played, the highest card of the suit led. Aces are high.\n' +
+      'The winner of a trick leads to the next one.',
+    endGame: 'After all 13 tricks the hand is scored. The deal passes to the left and a new hand is dealt. The game ends when a partnership reaches 5 points.',
+    scoring: 'Each partnership scores 1 point for every trick it wins beyond six (the first six tricks are the "book"). Honours are not scored in this version.',
+    aiHints: 'Track which cards have been played. Lead from long suits; avoid wasting high cards when your partner is already winning the trick.',
+  };
+  p.cards = standardDeck(p);
   return p;
 }

@@ -7,7 +7,7 @@ server. This module only relays prompts to hosted models.
 Providers:
   anthropic  - Claude via the official `anthropic` SDK (pip install anthropic).
                Credentials: ANTHROPIC_API_KEY (or an `ant auth login` profile).
-               Optional: CLAUDE_MODEL (default claude-opus-5-5), CLAUDE_EFFORT
+               Optional: CLAUDE_MODEL (default claude-sonnet-5-5), CLAUDE_EFFORT
                (low|medium|high|xhigh|max, default medium).
   openai     - OpenAI Chat Completions over plain HTTPS.
                Needs OPENAI_API_KEY and OPENAI_MODEL.
@@ -17,7 +17,7 @@ import os
 import urllib.error
 import urllib.request
 
-DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5"
 # Models that accept server-side fallbacks when a safety classifier declines.
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5-2", "claude-sonnet-5-5"}
 

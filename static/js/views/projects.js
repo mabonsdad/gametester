@@ -1,6 +1,6 @@
 // Project list: create, open, duplicate, import/export, delete.
 import * as api from '../api.js';
-import { blankProject, normalizeProject, sampleProject, uid } from '../model.js';
+import { blankProject, normalizeProject, sampleProject, uid, whistProject } from '../model.js';
 import { confirmDialog, download, field, fmtTime, h, modal, toast } from '../ui.js';
 
 export async function renderProjects(root, ctx) {
@@ -22,9 +22,10 @@ export async function renderProjects(root, ctx) {
     if (!projects.length) {
       list.append(h('div', { class: 'empty-card' },
         h('h3', {}, 'No projects yet'),
-        h('p', {}, 'Start a blank game, or load the sample game to see how the test bench works.'),
-        h('div', { class: 'row gap' },
-          h('button', { class: 'btn', onclick: () => create(sampleProject()) }, 'Load sample game'),
+        h('p', {}, 'Start a blank game, or load a sample to see how the test bench works.'),
+        h('div', { class: 'row gap wrap' },
+          h('button', { class: 'btn', onclick: () => create(sampleProject()) }, 'Sample: Harbour Lights (free-form)'),
+          h('button', { class: 'btn', onclick: () => create(whistProject()) }, 'Sample: Whist (automated rules)'),
           h('button', { class: 'btn primary', onclick: newProject }, '+ New project'))));
       return;
     }
@@ -55,7 +56,8 @@ export async function renderProjects(root, ctx) {
     const desc = h('textarea', { rows: 3, placeholder: 'One or two lines about the game idea' });
     const template = h('select', {},
       h('option', { value: 'blank' }, 'Blank: draw pile, discard, table, hands and a score counter'),
-      h('option', { value: 'sample' }, 'Copy of the sample game (Harbour Lights)'));
+      h('option', { value: 'sample' }, 'Copy of the sample game (Harbour Lights)'),
+      h('option', { value: 'whist' }, 'Classic Whist (trick-taking, legal moves and scoring automated)'));
     modal('New project', h('div', { class: 'stack' },
       field('Name', name),
       field('Description', desc),
@@ -63,8 +65,8 @@ export async function renderProjects(root, ctx) {
       { label: 'Cancel' },
       {
         label: 'Create', kind: 'primary', onClick: async () => {
-          const p = template.value === 'sample' ? sampleProject() : blankProject();
-          p.name = name.value.trim() || (template.value === 'sample' ? p.name : 'Untitled game');
+          const p = template.value === 'sample' ? sampleProject() : template.value === 'whist' ? whistProject() : blankProject();
+          p.name = name.value.trim() || (template.value === 'blank' ? 'Untitled game' : p.name);
           if (desc.value.trim()) p.description = desc.value.trim();
           await create(p);
         },
