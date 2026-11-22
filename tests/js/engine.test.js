@@ -120,3 +120,131 @@ test('free-form projects are unchanged: no restrictions, turn-end scoring works'
   assert.equal(st.players[0].counters.score, n);
   assert.equal(activePlayer(st).id, 'p2');
 });
+
+// ------------------------------------------------------------------ shedding + pauses
+import { switchbackProject } from '../../static/js/model.js';
+import { cardEffects, shedColours, shedTop } from '../../static/js/engine.js';
+
+function playShedTurn(p, st, r) {
+  const pid = activePlayer(st).id;
+  const lm = legalMoves(p, st, pid);
+  const stat = (u, k) => p.cards.find((d) => d.id === st.cards[u].defId).stats[k];
+  if (lm.legal.length && r() < 0.85) {
+    const card = lm.legal[Math.floor(r() * lm.legal.length)];
+    // legal means: matches colour or value, or is wild
+    const fx = cardEffects(p, st, card);
+    assert.ok(fx.wild || String(stat(card, 'colour')) === st.hand.colour || String(stat(card, 'value')) === st.hand.value);
+    const colours = shedColours(p);
+    const choose = colours[Math.floor(r() * colours.length)];
+    assert.equal(checkAction(p, st, { type: 'move', card, to: 'discard', actor: pid, choose }), null);
+    const nextBefore = st.players[(st.players.findIndex((x) => x.id === pid) + st.dir + st.players.length) % st.players.length];
+    const nextHand = st.zones[`${nextBefore.id}.hand`].cards.length;
+    const dirBefore = st.dir;
+    const roundBefore = st.hand.number;
+    apply(p, st, { type: 'move', card, to: 'discard', actor: pid, choose });
+    const sameRound = st.status === 'playing' && st.hand.number === roundBefore;
+    if (!sameRound) return; // went out: the next round has been dealt
+    assert.equal(shedTop(p, st), card);
+    if (fx.wild) assert.equal(st.hand.colour, choose);
+    else assert.equal(st.hand.colour, String(stat(card, 'colour')));
+    if (fx.reverse) assert.equal(st.dir, -dirBefore);
+    if (fx.draw) assert.equal(st.zones[`${nextBefore.id}.hand`].cards.length, nextHand + fx.draw, 'victim drew');
+    if (fx.draw || fx.skip || (fx.reverse && st.players.length === 2)) {
+      assert.notEqual(activePlayer(st).id, nextBefore.id, 'victim misses a turn');
+    }
+    return;
+  }
+  if (lm.canDraw) {
+    assert.equal(checkAction(p, st, { type: 'draw', actor: pid }), null);
+    apply(p, st, { type: 'draw', actor: pid });
+    return;
+  }
+  assert.ok(lm.canPass);
+  apply(p, st, { type: 'endTurn', actor: pid });
+}
+
+test('shedding (Switchback): legal plays, effects, round scoring, game end', () => {
+  const p = normalizeProject(switchbackProject());
+  const total = p.cards.reduce((n, c) => n + c.count, 0);
+  for (let seed = 1; seed <= 12; seed++) {
+    const n = 2 + (seed % 5);
+    const st = createGame(p, { players: players4.concat(players4).slice(0, n), seed });
+    const r = rng(seed * 7);
+    // starting card is never an action or wild
+    const fx0 = cardEffects(p, st, shedTop(p, st));
+    assert.ok(!(fx0.wild || fx0.skip || fx0.reverse || fx0.draw));
+    let safety = 0;
+    let lastScores = st.players.map((x) => x.counters.score);
+    let rounds = 0;
+    while (st.status === 'playing' && safety++ < 20000) {
+      const handNo = st.hand.number;
+      playShedTurn(p, st, r);
+      // cards are conserved
+      assert.equal(Object.values(st.zones).reduce((a, z) => a + z.cards.length, 0), total);
+      if (st.hand.number !== handNo || st.status === 'ended') {
+        rounds++;
+        // exactly one player (the one who went out) gained points: those left in other hands
+        const now = st.players.map((x) => x.counters.score);
+        const gained = now.map((v, i) => v - lastScores[i]).filter((d) => d !== 0);
+        assert.ok(gained.length <= 1, 'only the round winner scores');
+        lastScores = now;
+      }
+    }
+    assert.equal(st.status, 'ended', `seed ${seed} finished (${rounds} rounds)`);
+    assert.equal(st.result.winners.length, 1);
+    assert.ok(st.players.find((x) => x.id === st.result.winners[0]).counters.score >= 150);
+  }
+});
+
+test('shedding: draw rules - only the drawn card or pass after drawing', () => {
+  const p = normalizeProject(switchbackProject());
+  const st = createGame(p, { players: players4, seed: 4 });
+  const pid = activePlayer(st).id;
+  assert.match(checkAction(p, st, { type: 'endTurn', actor: pid }), /play a card or draw/);
+  const handBefore = st.zones[`${pid}.hand`].cards.length;
+  apply(p, st, { type: 'draw', actor: pid });
+  if (activePlayer(st).id === pid) {
+    // drawn card is playable: only it is legal, pass allowed, second draw not
+    const lm = legalMoves(p, st, pid);
+    assert.deepEqual(lm.legal, [st.hand.drawn]);
+    assert.ok(lm.canPass && !lm.canDraw);
+    assert.match(checkAction(p, st, { type: 'draw', actor: pid }), /already drawn/);
+    apply(p, st, { type: 'endTurn', actor: pid });
+  }
+  assert.notEqual(activePlayer(st).id, pid);
+  assert.equal(st.zones[`${pid}.hand`].cards.length, handBefore + 1);
+  const other = st.players.find((x) => x.id !== activePlayer(st).id).id;
+  assert.match(checkAction(p, st, { type: 'draw', actor: other }), /turn/);
+});
+
+test('pauses: after each trick and each hand, until "continue"', () => {
+  const p = normalizeProject(whistProject());
+  const st = createGame(p, { players: players4, seed: 5, options: { pauseTricks: true, pauseHands: true } });
+  for (let i = 0; i < 4; i++) {
+    const lm = legalMoves(p, st, activePlayer(st).id);
+    apply(p, st, { type: 'move', card: lm.legal[0], to: 'trick', actor: lm.pid });
+  }
+  assert.equal(st.pending?.type, 'trick');
+  assert.equal(st.zones.trick.cards.length, 4, 'trick stays on the table while paused');
+  const pid = activePlayer(st).id;
+  assert.equal(legalMoves(p, st, pid).legal.length, 0);
+  assert.match(checkAction(p, st, { type: 'move', card: st.zones[`${pid}.hand`].cards[0], to: 'trick', actor: pid }), /paused/);
+  apply(p, st, { type: 'continue', actor: 'designer' });
+  assert.equal(st.pending, null);
+  assert.equal(st.zones.trick.cards.length, 0);
+  assert.equal(st.hand.tricksPlayed, 1);
+  // play out the hand: it should pause after the 13th trick, before re-dealing
+  let guard = 0;
+  while (st.hand.number === 1 && guard++ < 200) {
+    if (st.pending?.type === 'hand') break;
+    if (st.pending) { apply(p, st, { type: 'continue', actor: 'designer' }); continue; }
+    const lm = legalMoves(p, st, activePlayer(st).id);
+    apply(p, st, { type: 'move', card: lm.legal[0], to: 'trick', actor: lm.pid });
+  }
+  assert.equal(st.pending?.type, 'hand');
+  assert.ok(st.lastHand && st.lastHand.changes.length === 2);
+  assert.equal(Object.values(st.lastHand.tricks).reduce((a, b) => a + b, 0), 13);
+  apply(p, st, { type: 'continue', actor: 'designer' });
+  assert.equal(st.hand.number, 2);
+  assert.equal(st.zones['p1.hand'].cards.length, 13);
+});

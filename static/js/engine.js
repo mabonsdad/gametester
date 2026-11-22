@@ -125,7 +125,7 @@ function placeCard(project, st, uid, toZid, { faceUp, position } = {}) {
 }
 
 // ------------------------------------------------------------------ create
-export function createGame(project, { players, seed } = {}) {
+export function createGame(project, { players, seed, options } = {}) {
   seed = Number.isFinite(seed) ? seed >>> 0 : Math.floor(Math.random() * 2 ** 31);
   const st = {
     v: 1,
@@ -147,6 +147,10 @@ export function createGame(project, { players, seed } = {}) {
     hand: null,
     handsPlayed: 0,
     lastTrick: null,
+    lastHand: null,
+    pending: null, // a pause waiting for 'continue' (see options)
+    dir: 1, // 1 = the project's turn direction, -1 = reversed
+    options: { pauseTricks: false, pauseHands: false, ...(options || {}) },
     created: Date.now(),
   };
   players.forEach((p, i) => {
@@ -179,7 +183,7 @@ export function createGame(project, { players, seed } = {}) {
   log(st, 'system', 'setup', `New game: ${players.length} players, ${n} cards, seed ${seed}.`);
   st.teams = makeTeams(project, st);
   if (st.teams.length) log(st, 'system', 'setup', `Teams: ${st.teams.map((t) => t.name).join(' vs ')}.`);
-  if (isTricks(project)) {
+  if (isAutomated(project)) {
     st.dealer = project.turn.firstPlayer === 'random'
       ? Math.floor(rand(st) * st.players.length)
       : (st.players.length - 1); // so seat 1 (left of the dealer) leads first
@@ -210,7 +214,7 @@ function runSetupStep(project, st, step) {
     if (!targets.length) throw new Error(`no zone "${step.to}"`);
     // Deal round-robin one card at a time: from seat 1, or (trick games) from
     // the player to the dealer's left, so the last card goes to the dealer.
-    if (isTricks(project) && targets.length === st.players.length) {
+    if (isAutomated(project) && targets.length === st.players.length) {
       const start = nextSeat(project, st, st.dealer);
       for (let r = 0; r < start; r++) targets.push(targets.shift());
     }
@@ -230,7 +234,7 @@ function runSetupStep(project, st, step) {
 }
 
 function startTurn(project, st) {
-  if (isTricks(project)) return; // trick games advance automatically
+  if (isAutomated(project)) return; // automated games advance by themselves
   const p = activePlayer(st);
   log(st, 'system', 'turn', `Turn ${st.turn.number}: ${p.name}`);
   const d = project.turn.drawAtStart || {};
@@ -289,6 +293,12 @@ export function apply(project, st, action) {
       const to = resolveZone(st, a.to, actor);
       if (!to) throw new Error(`no zone "${a.to}"`);
       const fromZid = c.zone;
+      if (isShedPlay(project, st, fromZid, to)) {
+        const owner = st.zones[fromZid].owner;
+        placeCard(project, st, a.card, to, { faceUp: true });
+        playShed(project, st, owner, a.card, a.choose);
+        break;
+      }
       if (isTrickPlay(project, st, fromZid, to)) {
         const owner = st.zones[fromZid].owner;
         placeCard(project, st, a.card, to, { faceUp: true });
@@ -308,6 +318,10 @@ export function apply(project, st, action) {
       break;
     }
     case 'draw': {
+      if (isShedding(project) && st.hand && st.status === 'playing' && player(st, actor)) {
+        shedDraw(project, st, actor);
+        break;
+      }
       const from = resolveZone(st, a.from || 'deck', actor);
       if (!from) throw new Error(`no zone "${a.from}"`);
       const to = resolveZone(st, a.to || 'hand', actor);
@@ -347,8 +361,22 @@ export function apply(project, st, action) {
       log(st, actor, 'phase', `Phase: ${phases[st.turn.phase]?.name || st.turn.phase + 1}`);
       break;
     }
+    case 'continue': {
+      const pause = st.pending;
+      if (!pause) break;
+      st.pending = null;
+      if (pause.type === 'trick') resolveTrick(project, st);
+      else if (pause.type === 'hand') startHand(project, st, false);
+      break;
+    }
     case 'endTurn': {
       if (st.status !== 'playing') throw new Error('the game has ended');
+      if (isShedding(project) && st.hand) {
+        const p = activePlayer(st);
+        log(st, p.id, 'pass', `${p.name} ${st.hand.drew ? 'keeps the drawn card and passes' : 'passes'}.`);
+        shedAdvance(project, st, p.id, 0);
+        break;
+      }
       log(st, actor, 'endTurn', `${who} ended their turn`);
       fireScoring(project, st, 'turnEnd', { actor: activePlayer(st).id });
       snapshotTimeline(st);
@@ -428,6 +456,8 @@ export function leadStats(st, counterId) {
 const NO_AUTOMATION = { style: 'free', enforce: 'off', autoScore: false, teams: 'none', scoring: [], endWhen: [], tricks: {} };
 export const automation = (project) => project.automation || NO_AUTOMATION;
 export const isTricks = (project) => automation(project).style === 'tricks';
+export const isShedding = (project) => automation(project).style === 'shedding';
+export const isAutomated = (project) => isTricks(project) || isShedding(project);
 
 function statOf(project, st, uid, stat) {
   return cardDef(project, st, uid)?.stats?.[stat];
@@ -435,7 +465,7 @@ function statOf(project, st, uid, stat) {
 
 function nextSeat(project, st, seat, from = 1) {
   const n = st.players.length;
-  const step = project.turn.direction === 'counterclockwise' ? -1 : 1;
+  const step = (project.turn.direction === 'counterclockwise' ? -1 : 1) * (st.dir || 1);
   return (((seat + step * from) % n) + n) % n;
 }
 
@@ -469,6 +499,7 @@ function isTrickPlay(project, st, fromZid, toZid) {
 
 function startHand(project, st, first) {
   const T = automation(project).tricks;
+  st.dir = 1;
   if (!first) {
     const pack = packZone(project, st);
     for (const uid of Object.keys(st.cards)) {
@@ -485,9 +516,13 @@ function startHand(project, st, first) {
     tricksWon: Object.fromEntries(st.players.map((p) => [p.id, 0])),
     tricksPlayed: 0,
     lastDealt: null,
+    colour: null, // shedding: colour and value to match
+    value: null,
+    drew: false,
+    drawn: null,
   };
   st.lastTrick = null;
-  log(st, 'system', 'hand', `Hand ${st.hand.number}: ${st.players[st.dealer].name} deals.`);
+  log(st, 'system', 'hand', `${isShedding(project) ? 'Round' : 'Hand'} ${st.hand.number}: ${st.players[st.dealer].name} deals.`);
   for (const step of project.setup || []) {
     if (!first && step.op === 'counter') continue; // keep scores between hands
     try {
@@ -495,6 +530,10 @@ function startHand(project, st, first) {
     } catch (e) {
       log(st, 'system', 'warning', `Setup step "${step.op}" failed: ${e.message}`);
     }
+  }
+  if (isShedding(project)) {
+    startShedRound(project, st);
+    return;
   }
   if (T.trump === 'fixed' && T.trumpSuit) {
     st.hand.trump = T.trumpSuit;
@@ -520,6 +559,12 @@ function playToTrick(project, st, pid, uid) {
   st.turn.number++;
   if (H.trick.length < st.players.length) {
     st.turn.active = nextSeat(project, st, player(st, pid).seat);
+    return;
+  }
+  if (st.options?.pauseTricks) {
+    const best = trickWinner(project, st, H.trick, H.trump);
+    st.pending = { type: 'trick', number: H.tricksPlayed + 1, winner: best.pid, winningCard: best.card };
+    log(st, 'system', 'pause', `Trick ${H.tricksPlayed + 1} complete: ${player(st, best.pid).name} wins with ${cardName(project, st, best.card)}. Paused - press Next.`);
     return;
   }
   resolveTrick(project, st);
@@ -565,19 +610,47 @@ function resolveTrick(project, st) {
   log(st, 'system', 'turn', `${player(st, winner).name} leads trick ${H.tricksPlayed + 1}.`);
 }
 
-function endHand(project, st) {
+function endHand(project, st, ctx = {}) {
   const H = st.hand;
-  const groups = competitors(st).map((c) => {
-    const members = teamOf(st, c.rep)?.players || [c.rep];
-    return `${c.name} ${members.reduce((s, m) => s + (H.tricksWon[m] || 0), 0)}`;
-  });
-  log(st, 'system', 'hand', `Hand ${H.number} over - tricks: ${groups.join(', ')}.`);
+  const comps = competitors(st);
+  const membersOf = (c) => teamOf(st, c.rep)?.players || [c.rep];
+  let summary;
+  if (isShedding(project)) {
+    const left = st.players.filter((p) => p.id !== ctx.winner)
+      .map((p) => `${p.name} ${st.zones[`${p.id}.hand`]?.cards.length ?? 0}`);
+    summary = `Round ${H.number} over - ${player(st, ctx.winner)?.name} went out. Cards left: ${left.join(', ')}.`;
+  } else {
+    summary = `Hand ${H.number} over - tricks: ${comps.map((c) => `${c.name} ${membersOf(c).reduce((s, m) => s + (H.tricksWon[m] || 0), 0)}`).join(', ')}.`;
+  }
+  log(st, 'system', 'hand', summary);
   st.handsPlayed++;
-  fireScoring(project, st, 'handEnd', {});
+  const before = Object.fromEntries(comps.map((c) => [c.id, { ...player(st, c.rep).counters }]));
+  const logMark = st.log.length;
+  fireScoring(project, st, 'handEnd', ctx);
+  const scoreLines = st.log.slice(logMark).filter((e) => e.type === 'score' || e.type === 'note').map((e) => e.text);
   snapshotTimeline(st);
+  st.lastHand = {
+    number: H.number,
+    summary,
+    winner: ctx.winner || null,
+    scoreLines,
+    tricks: isTricks(project) ? Object.fromEntries(comps.map((c) => [c.id, membersOf(c).reduce((s, m) => s + (H.tricksWon[m] || 0), 0)])) : null,
+    changes: comps.map((c) => {
+      const now = player(st, c.rep).counters;
+      return { id: c.id, name: c.name, deltas: Object.fromEntries(Object.keys(now).map((k) => [k, now[k] - (before[c.id][k] ?? 0)])), totals: { ...now } };
+    }),
+  };
   if (checkEnd(project, st, 'handEnd')) return;
-  if (automation(project).tricks.redeal) {
+  const again = isShedding(project) ? (automation(project).endWhen || []).length > 0 : automation(project).tricks.redeal;
+  if (again) {
+    if (st.options?.pauseHands) {
+      st.pending = { type: 'hand', number: H.number };
+      log(st, 'system', 'pause', `Paused after ${isShedding(project) ? 'round' : 'hand'} ${H.number} - press Deal to continue.`);
+      return;
+    }
     startHand(project, st, false);
+  } else if (isShedding(project)) {
+    finishGame(st, [ctx.winner], `${player(st, ctx.winner)?.name} went out`, 'system');
   } else {
     const c = project.counters[0]?.id;
     const best = c ? Math.max(...st.players.map((p) => p.counters[c] ?? 0)) : 0;
@@ -619,6 +692,11 @@ export function formulaScope(project, st, pid, ctx = {}) {
     turn: st.turn.number,
     cardsInHand: st.zones[`${pid}.hand`]?.cards.length ?? 0,
     isWinner: ctx.winner === pid ? 1 : 0,
+    wentOut: ctx.winner === pid ? 1 : 0,
+    handSum: (stat) => zoneCards('hand').reduce((s, u) => s + (Number(statOf(project, st, u, stat)) || 0), 0),
+    othersHandSum: (stat) => st.players.filter((o) => o.id !== pid)
+      .reduce((s, o) => s + (st.zones[`${o.id}.hand`]?.cards || []).reduce((t, u) => t + (Number(statOf(project, st, u, stat)) || 0), 0), 0),
+    othersCardsInHand: st.players.filter((o) => o.id !== pid).reduce((s, o) => s + (st.zones[`${o.id}.hand`]?.cards.length || 0), 0),
     zoneCount: (zone, stat, value) => zoneCards(zone).filter((u) => matches(u, stat, value)).length,
     zoneSum: (zone, stat) => zoneCards(zone).reduce((s, u) => s + (Number(statOf(project, st, u, stat)) || 0), 0),
     wonCount: (stat, value) => zoneCards(T.wonZone).filter((u) => matches(u, stat, value)).length,
@@ -631,6 +709,9 @@ export const FORMULA_HELP = [
   ['handTricks', 'tricks played so far this hand'],
   ['hand, handsPlayed', 'current hand number / hands finished'],
   ['cardsInHand, players, seat, turn', 'as named'],
+  ['wentOut', '1 for the player who emptied their hand this round (shedding games), else 0'],
+  ['handSum("points"), othersHandSum("points")', 'sum of a stat over their own hand / everyone else\'s hands'],
+  ['othersCardsInHand', "number of cards in everyone else's hands"],
   ['any counter id (e.g. score)', "that player's counter"],
   ['wonCount("suit","Hearts")', 'cards in their tricks-won zone (optionally matching a stat)'],
   ['wonSum("points")', 'sum of a stat over their tricks-won zone'],
@@ -690,26 +771,244 @@ function checkEnd(project, st, at) {
       const best = Math.max(...st.players.map((p) => p.counters[rule.winner] ?? 0));
       winners = st.players.filter((p) => (p.counters[rule.winner] ?? 0) === best).map((p) => p.id);
     }
-    finishGame(st, winners, rule.label || rule.expr, 'system');
+    finishGame(st, winners, rule.label ? `${rule.label} (${rule.expr})` : rule.expr, 'system');
     return true;
   }
   return false;
 }
 
+// ------------------------------------------------------------------ shedding (match & discard)
+// Play a card matching the current colour or value of the top discard (or a
+// wild). Otherwise draw one; the drawn card may be played straight away
+// (playDrawn) or the turn passes. Effects come from a card stat (default
+// "effect"), as space-separated words: skip, reverse, wild, draw:N.
+
+const SHED_DEFAULTS = { drawZone: 'deck', discardZone: 'discard', colourStat: 'colour', valueStat: 'value', effectStat: 'effect', wildColour: 'Wild', playDrawn: true };
+const shedCfg = (project) => ({ ...SHED_DEFAULTS, ...(automation(project).shedding || {}) });
+
+export function cardEffects(project, st, uid) {
+  const S = shedCfg(project);
+  const fx = { skip: false, reverse: false, wild: false, draw: 0 };
+  const raw = String(statOf(project, st, uid, S.effectStat) ?? '').toLowerCase();
+  for (const tok of raw.split(/[\s,]+/).filter(Boolean)) {
+    if (tok === 'skip') fx.skip = true;
+    else if (tok === 'reverse') fx.reverse = true;
+    else if (tok === 'wild') fx.wild = true;
+    else {
+      const m = tok.match(/^(?:draw|\+):?(\d+)$/);
+      if (m) fx.draw = Number(m[1]);
+    }
+  }
+  if (S.wildColour && String(statOf(project, st, uid, S.colourStat)) === S.wildColour) fx.wild = true;
+  return fx;
+}
+
+// Colours a wild card can name: every colour on a non-wild card.
+export function shedColours(project) {
+  const S = shedCfg(project);
+  const out = [];
+  for (const c of project.cards) {
+    const v = c.stats?.[S.colourStat];
+    if (v != null && String(v) !== S.wildColour && !out.includes(String(v))) out.push(String(v));
+  }
+  return out;
+}
+
+export function shedTop(project, st) {
+  const z = st.zones[shedCfg(project).discardZone];
+  return z?.cards[z.cards.length - 1] || null;
+}
+
+function canPlayOn(project, st, uid) {
+  const S = shedCfg(project);
+  const H = st.hand;
+  if (cardEffects(project, st, uid).wild) return true;
+  return String(statOf(project, st, uid, S.colourStat)) === H.colour
+    || (H.value != null && String(statOf(project, st, uid, S.valueStat)) === H.value);
+}
+
+function isShedPlay(project, st, fromZid, toZid) {
+  if (!isShedding(project) || st.status !== 'playing' || !st.hand) return false;
+  const from = st.zones[fromZid];
+  const to = st.zones[toZid];
+  return from?.defId === 'hand' && !!from.owner && to?.id === shedCfg(project).discardZone;
+}
+
+function shedReshuffle(project, st) {
+  const S = shedCfg(project);
+  const discard = st.zones[S.discardZone];
+  const deck = st.zones[S.drawZone];
+  if (!discard || discard.cards.length < 2) return;
+  const keep = discard.cards[discard.cards.length - 1];
+  for (const u of discard.cards.slice(0, -1)) placeCard(project, st, u, deck.id, { faceUp: false });
+  discard.cards = [keep];
+  shuffleArray(st, deck.cards);
+  log(st, 'system', 'shuffle', `The ${discard.name} (except its top card) is shuffled to make a new ${deck.name}.`);
+}
+
+function drawCards(project, st, pid, n) {
+  const S = shedCfg(project);
+  const deck = st.zones[S.drawZone];
+  const got = [];
+  for (let k = 0; k < n; k++) {
+    if (!deck.cards.length) shedReshuffle(project, st);
+    const top = deck.cards[deck.cards.length - 1];
+    if (!top) break;
+    placeCard(project, st, top, `${pid}.hand`);
+    got.push(top);
+  }
+  return got;
+}
+
+function startShedRound(project, st) {
+  const S = shedCfg(project);
+  const deck = st.zones[S.drawZone];
+  const discard = st.zones[S.discardZone];
+  if (!deck || !discard) {
+    log(st, 'system', 'note', `⚠ Shedding needs zones "${S.drawZone}" and "${S.discardZone}".`);
+    return;
+  }
+  if (!discard.cards.length && deck.cards.length) placeCard(project, st, deck.cards[deck.cards.length - 1], discard.id, { faceUp: true });
+  // The starting card must be a plain card: action and wild cards go back under the pile.
+  for (let i = 0; i < deck.cards.length + 1; i++) {
+    const top = shedTop(project, st);
+    const fx = top && cardEffects(project, st, top);
+    if (!top || !(fx.wild || fx.skip || fx.reverse || fx.draw) || !deck.cards.length) break;
+    placeCard(project, st, top, deck.id, { faceUp: false, position: 'bottom' });
+    placeCard(project, st, deck.cards[deck.cards.length - 1], discard.id, { faceUp: true });
+  }
+  const top = shedTop(project, st);
+  st.hand.colour = top ? String(statOf(project, st, top, S.colourStat)) : null;
+  st.hand.value = top ? String(statOf(project, st, top, S.valueStat)) : null;
+  st.turn.active = nextSeat(project, st, st.dealer);
+  st.turn.phase = 0;
+  log(st, 'system', 'turn', `Starting card: ${top ? cardName(project, st, top) : 'none'}. ${activePlayer(st).name} plays first.`);
+}
+
+function shedAdvance(project, st, pid, skip) {
+  st.hand.drew = false;
+  st.hand.drawn = null;
+  st.turn.active = nextSeat(project, st, player(st, pid).seat, 1 + skip);
+  st.turn.number++;
+}
+
+function favouriteColour(project, st, pid) {
+  const S = shedCfg(project);
+  const counts = {};
+  for (const u of st.zones[`${pid}.hand`]?.cards || []) {
+    const c = String(statOf(project, st, u, S.colourStat));
+    if (c !== S.wildColour) counts[c] = (counts[c] || 0) + 1;
+  }
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || shedColours(project)[0] || null;
+}
+
+function playShed(project, st, pid, uid, choose) {
+  const S = shedCfg(project);
+  const H = st.hand;
+  const fx = cardEffects(project, st, uid);
+  const who = player(st, pid).name;
+  H.value = String(statOf(project, st, uid, S.valueStat));
+  if (fx.wild) {
+    const colours = shedColours(project);
+    H.colour = colours.includes(choose) ? choose : favouriteColour(project, st, pid);
+  } else {
+    H.colour = String(statOf(project, st, uid, S.colourStat));
+  }
+  log(st, pid, 'play', `${who} played ${cardName(project, st, uid)}${fx.wild ? ` and chose ${H.colour}` : ''}.`, { data: { card: uid, choose: fx.wild ? H.colour : undefined } });
+  let skip = 0;
+  if (fx.reverse) {
+    st.dir = -(st.dir || 1);
+    log(st, 'system', 'effect', `Direction of play reversed.`);
+    if (st.players.length === 2) skip = 1;
+  }
+  const victim = st.players[nextSeat(project, st, player(st, pid).seat)];
+  if (fx.draw) {
+    const got = drawCards(project, st, victim.id, fx.draw);
+    log(st, 'system', 'effect', `${victim.name} draws ${got.length} and misses a turn: ${got.map((u) => cardName(project, st, u)).join(', ')}.`,
+      { publicText: `${victim.name} draws ${got.length} and misses a turn.` });
+    skip = 1;
+  } else if (fx.skip) {
+    log(st, 'system', 'effect', `${victim.name} misses a turn.`);
+    skip = 1;
+  }
+  if (!st.zones[`${pid}.hand`].cards.length) {
+    st.turn.number++;
+    endHand(project, st, { winner: pid });
+    return;
+  }
+  if (st.zones[`${pid}.hand`].cards.length === 1) log(st, 'system', 'effect', `${who} has one card left!`);
+  shedAdvance(project, st, pid, skip);
+}
+
+function shedDraw(project, st, pid) {
+  const S = shedCfg(project);
+  const H = st.hand;
+  const who = player(st, pid).name;
+  const got = drawCards(project, st, pid, 1);
+  H.drew = true;
+  H.drawn = got[0] || null;
+  if (!got.length) {
+    log(st, pid, 'draw', `${who} cannot draw - no cards left. The turn passes.`);
+    shedAdvance(project, st, pid, 0);
+    return;
+  }
+  const playable = S.playDrawn && canPlayOn(project, st, got[0]);
+  log(st, pid, 'draw', `${who} drew ${cardName(project, st, got[0])}${playable ? ' - it can be played' : ''}.`, { publicText: `${who} drew a card.` });
+  if (!playable) {
+    log(st, 'system', 'turn', `${who} cannot play the drawn card; the turn passes.`, { publicText: `${who} could not play; the turn passes.` });
+    shedAdvance(project, st, pid, 0);
+  }
+}
+
+function shedLegal(project, st, pid, out) {
+  const S = shedCfg(project);
+  const H = st.hand;
+  const hand = st.zones[`${pid}.hand`]?.cards || [];
+  out.target = S.discardZone;
+  out.colours = shedColours(project);
+  const need = `${H.colour}${H.value != null ? ` or a ${H.value}` : ''}`;
+  if (H.drew) {
+    for (const u of hand) {
+      const ok = u === H.drawn && canPlayOn(project, st, u);
+      out.cards[u] = ok ? '' : u === H.drawn ? `It does not match ${need}.` : 'After drawing you may only play the card you drew - or pass.';
+      if (ok) out.legal.push(u);
+    }
+    out.canPass = true;
+    out.summary = out.legal.length ? `You drew ${cardName(project, st, H.drawn)}: play it, or pass to keep it.` : 'Pass.';
+    return out;
+  }
+  for (const u of hand) {
+    const ok = canPlayOn(project, st, u);
+    out.cards[u] = ok ? '' : `It must match ${need}, or be a wild card.`;
+    if (ok) out.legal.push(u);
+  }
+  out.canDraw = true;
+  out.summary = out.legal.length ? `Play a ${need} card (or a wild), or draw a card.` : `No card matches ${need}: draw a card.`;
+  return out;
+}
+
 // ------------------------------------------------------------------ legal moves
-// For trick games: which cards in pid's hand may be played now, and why not.
-// Returns null when the project has no move restrictions (free-form).
+// For automated games: which cards in pid's hand may be played now (and why
+// not), plus whether drawing or passing is allowed. Returns null when the
+// project has no move restrictions (free-form).
 export function legalMoves(project, st, pid) {
-  if (!isTricks(project) || st.status !== 'playing' || !st.hand) return null;
+  if (!isAutomated(project) || st.status !== 'playing' || !st.hand) return null;
   const T = automation(project).tricks;
   const active = activePlayer(st);
   const hand = st.zones[`${pid}.hand`]?.cards || [];
-  const out = { pid, target: resolveZone(st, T.zone, pid), cards: {}, legal: [], summary: '' };
+  const out = { pid, target: resolveZone(st, T.zone, pid), cards: {}, legal: [], summary: '', canDraw: false, canPass: false };
+  if (st.pending) {
+    for (const u of hand) out.cards[u] = 'Paused - press Next to continue.';
+    out.summary = st.pending.type === 'trick' ? 'Trick complete - press Next trick.' : 'Hand over - press Deal next hand.';
+    out.paused = true;
+    return out;
+  }
   if (pid !== active.id) {
     for (const u of hand) out.cards[u] = `Wait - it is ${active.name}'s turn.`;
     out.summary = `Waiting for ${active.name}.`;
     return out;
   }
+  if (isShedding(project)) return shedLegal(project, st, pid, out);
   const led = st.hand.led;
   const suit = (u) => statOf(project, st, u, T.suitStat);
   const canFollow = T.followSuit && led != null && hand.some((u) => suit(u) === led);
@@ -732,7 +1031,9 @@ export function checkAction(project, st, action) {
   if (A.enforce === 'off' || st.status !== 'playing') return null;
   const actor = action.actor || activePlayer(st).id;
   if (!player(st, actor)) return null;
-  if (!isTricks(project)) return null;
+  if (!isAutomated(project)) return null;
+  if (st.pending && action.type !== 'note') return 'The game is paused - press Next to continue first.';
+  if (isShedding(project)) return checkShed(project, st, action, actor);
   const T = A.tricks;
   const trickName = zoneDef(project, T.zone)?.name || 'trick';
   switch (action.type) {
@@ -750,6 +1051,30 @@ export function checkAction(project, st, action) {
     case 'endTurn': return 'No need: the turn passes automatically when a card is played.';
     case 'draw': case 'flip': case 'shuffle': case 'phase':
       return `"${action.type}" is not part of this game - play a card to the ${trickName}.`;
+    case 'counter': return A.autoScore ? 'Scoring is automatic in this game.' : null;
+    default: return null;
+  }
+}
+
+function checkShed(project, st, action, actor) {
+  const A = automation(project);
+  const S = shedCfg(project);
+  const active = activePlayer(st);
+  const pileName = st.zones[S.discardZone]?.name || 'discard pile';
+  const turnMsg = actor !== active.id ? `It is ${active.name}'s turn, not ${player(st, actor).name}'s.` : null;
+  switch (action.type) {
+    case 'move': {
+      const c = st.cards[action.card];
+      if (!c) return null;
+      const from = st.zones[c.zone];
+      const to = resolveZone(st, action.to, actor);
+      if (!(from.defId === 'hand' && to === S.discardZone)) return `In this game you play cards from your hand onto the ${pileName}, or draw a card; everything else is automatic.`;
+      if (from.owner !== actor) return `That card is in ${player(st, from.owner)?.name}'s hand.`;
+      return turnMsg || legalMoves(project, st, actor).cards[action.card] || null;
+    }
+    case 'draw': return turnMsg || (st.hand.drew ? 'You have already drawn this turn - play the drawn card or pass.' : null);
+    case 'endTurn': return turnMsg || (st.hand.drew ? null : 'You must play a card or draw before you can pass.');
+    case 'flip': case 'shuffle': case 'phase': return `"${action.type}" is not part of this game - play a card or draw.`;
     case 'counter': return A.autoScore ? 'Scoring is automatic in this game.' : null;
     default: return null;
   }
@@ -774,6 +1099,13 @@ export function describeAutomation(project) {
     }[T.trump] || 'No trumps.');
     lines.push(T.firstLead === 'dealer' ? 'The dealer leads the first trick of each hand.' : "The player to the dealer's left leads the first trick of each hand.");
     lines.push(T.redeal ? 'When the hands are empty the hand is scored, the deal passes to the left and the cards are re-dealt.' : 'When the hands are empty the game ends.');
+  } else if (A.style === 'shedding') {
+    const S = shedCfg(project);
+    lines.push(`Shedding: on your turn, play one card from your hand onto the ${zname(S.discardZone)} if it matches the current colour (card stat "${S.colourStat}") or value (stat "${S.valueStat}") of the top card, or is a wild card.`);
+    lines.push(`If you cannot or do not want to play, draw one card from the ${zname(S.drawZone)}. ${S.playDrawn ? 'If the drawn card can be played you may play it straight away, or pass and keep it; if not, the turn passes.' : 'Your turn then ends.'}`);
+    lines.push(`Card effects (card stat "${S.effectStat}"): skip - the next player misses a turn; reverse - the direction of play changes (with 2 players it acts as skip); draw:N - the next player draws N cards and misses their turn; wild - play it on anything and choose the colour to follow${S.wildColour ? ` (cards whose colour is "${S.wildColour}" are wild)` : ''}.`);
+    lines.push('The starting card is never an action or wild card. When the draw pile runs out, the discard pile (except its top card) is shuffled to form a new one.');
+    lines.push((A.endWhen || []).length ? 'The first player to empty their hand wins the round; rounds are scored and a new round is dealt until the game ends.' : 'The first player to empty their hand wins the game.');
   } else {
     lines.push('Free-form: players (or AI seats) move cards and apply the rules themselves.');
   }

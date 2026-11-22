@@ -6,7 +6,8 @@
 
 import * as api from './api.js';
 import {
-  activePlayer, automation, cardDef, describeAutomation, isTricks, isVisibleTo, legalMoves, player, resolveZone, teamOf,
+  activePlayer, automation, cardDef, cardEffects, describeAutomation, isShedding, isTricks, isVisibleTo, legalMoves, player,
+  resolveZone, shedTop, teamOf,
 } from './engine.js';
 import { zoneDef } from './model.js';
 
@@ -46,12 +47,29 @@ export function buildSystemPrompt(project) {
   const counters = project.counters.map((c) => `- ${c.id}: ${c.name} (starts at ${c.start})`).join('\n');
   const A = automation(project);
   const tricks = isTricks(project);
-  const harness = tricks
+  const shedding = isShedding(project);
+  const harness = shedding
+    ? 'The harness runs the mechanics listed under "Automated by the harness": it checks that your move is legal, applies card effects, passes the turn, deals new rounds' + (A.autoScore ? ', keeps the score' : '') + ' and ends the game. You only choose what to play (or to draw).'
+    : tricks
     ? 'The harness runs the mechanics listed under "Automated by the harness": it checks that your card is legal, passes the turn, decides who wins each trick, deals new hands' + (A.autoScore ? ', keeps the score' : '') + ' and ends the game. You only choose which card to play.'
     : A.autoScore && A.scoring.length
       ? 'The harness keeps the score using the rules under "Automated by the harness" - do not change those counters yourself. Apply all other rules yourself.'
       : 'The harness does NOT enforce rules. You must apply them yourself, including scoring by changing counters and ending the game when the rules say so.';
-  const respond = tricks
+  const respond = shedding
+    ? `Reply with ONE JSON object and nothing else:
+{
+  "reasoning": "1-3 sentences: why this move",
+  "actions": [ ONE of:
+     {"type":"move","card":"<one of your LEGAL card ids>","to":"${A.shedding?.discardZone || 'discard'}","choose":"<colour - only for wild cards>"}
+     {"type":"draw"}        // when you cannot or do not want to play (only if drawing is allowed)
+     {"type":"endTurn"}     // pass - only allowed after you have drawn this turn
+  ],
+  "winConfidence": 0-100,   // honest estimate that you will win the game from here
+  "experience": "one sentence on how this turn felt from your seat (interesting choice? forced? hopeless?)",
+  "designerNotes": "rule ambiguities or design problems you noticed, or empty string"
+}
+Send exactly one action. If you draw, you will be asked again whether to play the drawn card.`
+    : tricks
     ? `Reply with ONE JSON object and nothing else:
 {
   "reasoning": "1-3 sentences: why this card",
@@ -121,7 +139,24 @@ export function buildUserPrompt(project, st, pid) {
   const recent = st.log.slice(-25).map((e) => `[t${e.turn}] ${e.publicText}`).join('\n');
   const nm = (u) => `${u} "${cardDef(project, st, u)?.name}"`;
   let trickInfo = '';
-  if (isTricks(project) && st.hand) {
+  if (isShedding(project) && st.hand) {
+    const H = st.hand;
+    const lm = legalMoves(project, st, pid);
+    const top = shedTop(project, st);
+    const n = st.players.length;
+    const step = (project.turn.direction === 'counterclockwise' ? -1 : 1) * (st.dir || 1);
+    const next = st.players[(((me.seat + step) % n) + n) % n];
+    const wilds = lm.legal.filter((u) => cardEffects(project, st, u).wild);
+    trickInfo = `
+Round ${H.number}. Top of the discard pile: ${top ? nm(top) : 'none'}. Colour to match: ${H.colour}; value to match: ${H.value}.
+Direction of play: ${st.dir === 1 ? 'normal' : 'reversed'}; the next player is ${next.name}.
+Cards in each hand: ${st.players.map((p) => `${p.name} ${st.zones[`${p.id}.hand`]?.cards.length ?? 0}${p.id === pid ? ' (you)' : ''}`).join(', ')}.
+${H.drew ? `You have drawn ${nm(H.drawn)} this turn.\n` : ''}
+${lm.summary}
+Legal cards: ${lm.legal.length ? lm.legal.map(nm).join(', ') : 'none'}
+Other options: ${[lm.canDraw ? 'draw a card ({"type":"draw"})' : '', lm.canPass ? 'pass ({"type":"endTurn"})' : ''].filter(Boolean).join('; ') || 'none'}
+${wilds.length ? `For a wild card, add "choose" with one of: ${lm.colours.join(', ')}.\n` : ''}`;
+  } else if (isTricks(project) && st.hand) {
     const H = st.hand;
     const lm = legalMoves(project, st, pid);
     const team = teamOf(st, pid);
@@ -195,6 +230,13 @@ export function checkAction(project, st, pid, a) {
 // to a random shared spread zone (or discard), otherwise draws.
 export function randomBot(project, st, pid) {
   const lm = legalMoves(project, st, pid);
+  if (lm && isShedding(project)) {
+    const card = lm.legal[Math.floor(Math.random() * lm.legal.length)];
+    const actions = card
+      ? [{ type: 'move', card, to: lm.target, choose: lm.colours[Math.floor(Math.random() * lm.colours.length)] }]
+      : lm.canDraw ? [{ type: 'draw' }] : [{ type: 'endTurn' }];
+    return { reasoning: 'Random legal move (smoke test).', actions, winConfidence: null, experience: '', designerNotes: '' };
+  }
   if (lm) {
     const card = lm.legal[Math.floor(Math.random() * lm.legal.length)];
     return { reasoning: 'Random legal card (smoke test).', actions: card ? [{ type: 'move', card, to: lm.target }] : [], winConfidence: null, experience: '', designerNotes: '' };

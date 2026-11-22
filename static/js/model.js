@@ -29,15 +29,16 @@ export const SETUP_OPS = {
 export const STYLES = {
   free: 'Free-form: any card can go anywhere; players apply the rules',
   tricks: 'Trick-taking: play one card to a trick; highest wins (Whist, Hearts, Spades…)',
+  shedding: 'Shedding: match the colour or value of the top card; first to empty their hand wins',
 };
 export const ENFORCE = {
   off: 'Off - no checks',
   warn: 'Warn - allow, but log a warning',
   strict: 'Strict - block illegal moves',
 };
-export const SCORE_EVENTS = { trickWon: 'a trick is won', handEnd: 'a hand ends', turnEnd: 'a turn ends' };
-export const SCORE_WHO = { each: 'each player', team: 'each team', winner: 'the trick winner', winnerTeam: "the trick winner's team", active: 'the player whose turn ended' };
-export const END_AT = { handEnd: 'each hand', trickWon: 'each trick', turnEnd: 'each turn' };
+export const SCORE_EVENTS = { trickWon: 'a trick is won', handEnd: 'a hand / round ends', turnEnd: 'a turn ends' };
+export const SCORE_WHO = { each: 'each player', team: 'each team', winner: 'the winner (of the trick, or who went out)', winnerTeam: "the winner's team", active: 'the player whose turn ended' };
+export const END_AT = { handEnd: 'each hand / round', trickWon: 'each trick', turnEnd: 'each turn' };
 
 export function defaultAutomation() {
   return {
@@ -55,6 +56,15 @@ export function defaultAutomation() {
       trumpSuit: '',
       firstLead: 'leftOfDealer', // leftOfDealer | dealer
       redeal: true,
+    },
+    shedding: {
+      drawZone: 'deck',
+      discardZone: 'discard',
+      colourStat: 'colour',
+      valueStat: 'value',
+      effectStat: 'effect',
+      wildColour: 'Wild',
+      playDrawn: true,
     },
     scoring: [], // { event, who, counter, expr, when, label }
     endWhen: [], // { at, expr, winner: '' (players matching) | counter id (highest) , label }
@@ -140,6 +150,7 @@ export function normalizeProject(p) {
   out.automation = {
     ...base.automation, ...A,
     tricks: { ...base.automation.tricks, ...(A.tricks || {}) },
+    shedding: { ...base.automation.shedding, ...(A.shedding || {}) },
     scoring: Array.isArray(A.scoring) ? A.scoring : [],
     endWhen: Array.isArray(A.endWhen) ? A.endWhen : [],
   };
@@ -305,5 +316,69 @@ export function whistProject() {
     aiHints: 'Track which cards have been played. Lead from long suits; avoid wasting high cards when your partner is already winning the trick.',
   };
   p.cards = standardDeck(p);
+  return p;
+}
+
+// ------------------------------------------------------------------ shedding sample
+// An original match-and-shed game (same family as Crazy Eights), included to
+// exercise the shedding rules, card effects and round scoring.
+export function switchbackProject() {
+  const p = blankProject('Switchback (shedding sample)');
+  p.description = 'Match the colour or value of the top card and be first to empty your hand. Action cards skip, reverse and make others draw. Included to show shedding rules, card effects and round scoring.';
+  p.players = { min: 2, max: 6, default: 4 };
+  p.cardBack = { color: '#23324a', image: null, label: 'SWITCHBACK' };
+  p.zones = [
+    { id: 'deck', name: 'Draw pile', scope: 'shared', layout: 'stack', faceUp: false, visibility: 'public' },
+    { id: 'discard', name: 'Discard pile', scope: 'shared', layout: 'stack', faceUp: true, visibility: 'public' },
+    { id: 'hand', name: 'Hand', scope: 'player', layout: 'hand', faceUp: true, visibility: 'owner', builtin: true },
+  ];
+  p.counters = [{ id: 'score', name: 'Points', start: 0 }];
+  p.setup = [
+    { op: 'shuffle', zone: 'deck' },
+    { op: 'deal', from: 'deck', to: 'hand', count: 7 },
+    { op: 'move', from: 'deck', to: 'discard', count: 1, faceUp: true },
+  ];
+  p.turn = { phases: [], drawAtStart: { count: 0, from: 'deck' }, firstPlayer: 'seat1', direction: 'clockwise' };
+  p.automation = {
+    ...defaultAutomation(),
+    style: 'shedding',
+    enforce: 'strict',
+    autoScore: true,
+    scoring: [
+      { event: 'handEnd', who: 'winner', counter: 'score', expr: 'othersHandSum("points")', when: '', label: "Points left in everyone else's hands" },
+    ],
+    endWhen: [
+      { at: 'handEnd', expr: 'score >= 150', winner: '', label: 'First to 150 points' },
+    ],
+  };
+  p.rules = {
+    overview: 'A fast matching game. Everyone starts with 7 cards; one card is turned up to start the discard pile.',
+    objective: 'Be first to empty your hand in each round, and first to 150 points overall.',
+    turnRules:
+      'On your turn play ONE card that matches the top card of the discard pile by colour or by value (number or symbol), or play a Prism (wild).\n' +
+      'If you cannot (or choose not to) play, draw one card. If that card can be played you may play it straight away; otherwise your turn ends.\n' +
+      'Sidestep: the next player misses their turn.\n' +
+      'Switchback: reverse the direction of play (with two players it works like Sidestep).\n' +
+      '+2: the next player draws two cards and misses their turn.\n' +
+      'Prism: play on anything and name the colour to follow. Prism +4: as Prism, and the next player draws four cards and misses their turn.',
+    endGame: 'A round ends as soon as someone plays their last card (any effect on that card still happens). Rounds continue until a player reaches 150 points.',
+    scoring: 'The player who goes out scores the points left in everyone else\'s hands: number cards at face value, Sidestep / Switchback / +2 cards 20, Prism cards 50.',
+    aiHints: 'Hold on to Prism cards for when you are stuck. Use +2 and Sidestep on a player who is close to going out. Change colour to one you hold many of.',
+  };
+  const colours = [['Ember', '#e0643f'], ['Lagoon', '#2a95ab'], ['Moss', '#5f9e45'], ['Plum', '#8b5aa6']];
+  const start = 'deck';
+  const card = (id, name, description, colour, colourHex, value, effect, points, count) => ({
+    ...blankCard(p), id, name, description, count, startZone: start, color: colourHex,
+    stats: { colour, value, ...(effect ? { effect } : {}), points }, tags: ['colour-card'],
+  });
+  for (const [c, hex] of colours) {
+    const k = c.toLowerCase();
+    for (let v = 1; v <= 9; v++) p.cards.push(card(`k_${k}${v}`, `${c} ${v}`, `${c} number card`, c, hex, String(v), '', v, 2));
+    p.cards.push(card(`k_${k}_skip`, `${c} Sidestep`, 'Next player misses a turn', c, hex, 'skip', 'skip', 20, 2));
+    p.cards.push(card(`k_${k}_rev`, `${c} Switchback`, 'Reverse the direction of play', c, hex, 'reverse', 'reverse', 20, 2));
+    p.cards.push(card(`k_${k}_d2`, `${c} +2`, 'Next player draws 2 and misses a turn', c, hex, '+2', 'draw:2', 20, 2));
+  }
+  p.cards.push(card('k_prism', 'Prism', 'Wild: play on anything, choose the colour', 'Wild', '#2b2b33', 'wild', 'wild', 50, 4));
+  p.cards.push(card('k_prism4', 'Prism +4', 'Wild: choose the colour; next player draws 4 and misses a turn', 'Wild', '#2b2b33', 'wild+4', 'wild draw:4', 50, 2));
   return p;
 }

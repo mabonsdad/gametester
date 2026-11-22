@@ -12,10 +12,18 @@ with any mix of human and AI players.
   see every hand, only the active hand, or one seat's view. Drag cards, flip,
   draw, score, undo, and step through turns. AI seats can be played one at a
   time or automatically.
-* **Automation (optional)**: trick-taking play (follow suit, trumps,
-  partnerships, re-dealing), legal-move checking (off / warn / strict) with
-  legal cards highlighted, and scoring rules and end conditions written as
-  simple formulas, e.g. `max(0, teamTricks - 6)`. See the Whist sample.
+* **Automation (optional)**:
+  * trick-taking play: follow suit, trumps, partnerships, re-dealing;
+  * shedding play: match colour or value, draw, card effects (skip,
+    reverse, draw:N, wild), rounds;
+  * legal-move checking (off / warn / strict), with legal cards highlighted;
+  * scoring rules and end conditions written as simple formulas, e.g.
+    `max(0, teamTricks - 6)` or `othersHandSum("points")`.
+
+  See the Whist and Switchback samples.
+* **Pauses**: optionally stop after each trick and after each hand or round,
+  so the result can be read; the game-over screen shows the final standings
+  and has a "Play again" button.
 * **Insights**: score chart, lead changes, each AI seat's win confidence and
   how its turn felt, plus your notes.
 
