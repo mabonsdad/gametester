@@ -36,8 +36,17 @@ export const ENFORCE = {
   warn: 'Warn - allow, but log a warning',
   strict: 'Strict - block illegal moves',
 };
-export const SCORE_EVENTS = { trickWon: 'a trick is won', handEnd: 'a hand / round ends', turnEnd: 'a turn ends' };
-export const SCORE_WHO = { each: 'each player', team: 'each team', winner: 'the winner (of the trick, or who went out)', winnerTeam: "the winner's team", active: 'the player whose turn ended' };
+export const SCORE_EVENTS = {
+  trickWon: 'a trick is won', handEnd: 'a hand / round ends', turnEnd: 'a turn ends',
+  announcement: 'a required announcement is made', penalty: 'a player is penalised for a missed announcement',
+};
+export const SCORE_WHO = {
+  each: 'each player', team: 'each team',
+  winner: 'the winner (of the trick, who went out, or who made the catch)', winnerTeam: "the winner's team",
+  active: 'the player concerned (whose turn ended / who announced / who was penalised)',
+};
+export const MISSED = { catch: 'Other players can catch them', auto: 'Penalty applied automatically', none: 'Only recorded' };
+export const STACKING = { off: 'No stacking', same: 'Same draw card only (+2 on +2, +4 on +4)', any: 'Any draw card on any draw card' };
 export const END_AT = { handEnd: 'each hand / round', trickWon: 'each trick', turnEnd: 'each turn' };
 
 export function defaultAutomation() {
@@ -65,7 +74,9 @@ export function defaultAutomation() {
       effectStat: 'effect',
       wildColour: 'Wild',
       playDrawn: true,
+      stackDraws: 'off',
     },
+    announcements: [], // { id, label, check, when, ifMissed, penaltyDraw, penaltyCounter, penaltyAmount, aiCatch, remind }
     scoring: [], // { event, who, counter, expr, when, label }
     endWhen: [], // { at, expr, winner: '' (players matching) | counter id (highest) , label }
   };
@@ -153,6 +164,7 @@ export function normalizeProject(p) {
     shedding: { ...base.automation.shedding, ...(A.shedding || {}) },
     scoring: Array.isArray(A.scoring) ? A.scoring : [],
     endWhen: Array.isArray(A.endWhen) ? A.endWhen : [],
+    announcements: Array.isArray(A.announcements) ? A.announcements : [],
   };
   out.zones = Array.isArray(p.zones) && p.zones.length ? p.zones : base.zones;
   if (!out.zones.some((z) => z.id === 'hand')) out.zones.push(defaultZones()[3]);
@@ -322,6 +334,13 @@ export function whistProject() {
 // ------------------------------------------------------------------ shedding sample
 // An original match-and-shed game (same family as Crazy Eights), included to
 // exercise the shedding rules, card effects and round scoring.
+export function blankAnnouncement(project) {
+  return {
+    id: 'lastCard', label: 'Last card!', check: 'afterPlay', when: 'cardsInHand == 1', ifMissed: 'catch',
+    penaltyDraw: 2, penaltyCounter: '', penaltyAmount: '', aiCatch: 70, remind: false,
+  };
+}
+
 export function switchbackProject() {
   const p = blankProject('Switchback (shedding sample)');
   p.description = 'Match the colour or value of the top card and be first to empty your hand. Action cards skip, reverse and make others draw. Included to show shedding rules, card effects and round scoring.';
@@ -332,7 +351,7 @@ export function switchbackProject() {
     { id: 'discard', name: 'Discard pile', scope: 'shared', layout: 'stack', faceUp: true, visibility: 'public' },
     { id: 'hand', name: 'Hand', scope: 'player', layout: 'hand', faceUp: true, visibility: 'owner', builtin: true },
   ];
-  p.counters = [{ id: 'score', name: 'Points', start: 0 }];
+  p.counters = [{ id: 'score', name: 'Points', start: 0 }, { id: 'catches', name: 'Catches', start: 0 }];
   p.setup = [
     { op: 'shuffle', zone: 'deck' },
     { op: 'deal', from: 'deck', to: 'hand', count: 7 },
@@ -344,8 +363,13 @@ export function switchbackProject() {
     style: 'shedding',
     enforce: 'strict',
     autoScore: true,
+    shedding: { ...defaultAutomation().shedding, stackDraws: 'same' },
+    announcements: [
+      { ...blankAnnouncement(), id: 'lastCard', label: 'Last card!', when: 'cardsInHand == 1', ifMissed: 'catch', penaltyDraw: 2, aiCatch: 70 },
+    ],
     scoring: [
       { event: 'handEnd', who: 'winner', counter: 'score', expr: 'othersHandSum("points")', when: '', label: "Points left in everyone else's hands" },
+      { event: 'penalty', who: 'winner', counter: 'catches', expr: '1', when: '', label: 'Caught someone who forgot "Last card!"' },
     ],
     endWhen: [
       { at: 'handEnd', expr: 'score >= 150', winner: '', label: 'First to 150 points' },
@@ -360,10 +384,12 @@ export function switchbackProject() {
       'Sidestep: the next player misses their turn.\n' +
       'Switchback: reverse the direction of play (with two players it works like Sidestep).\n' +
       '+2: the next player draws two cards and misses their turn.\n' +
-      'Prism: play on anything and name the colour to follow. Prism +4: as Prism, and the next player draws four cards and misses their turn.',
+      'Prism: play on anything and name the colour to follow. Prism +4: as Prism, and the next player draws four cards and misses their turn.\n' +
+      'Stacking: if a +2 is played on you, you may play your own +2 instead of drawing; the next player then faces +4, and so on. Prism +4 stacks only on Prism +4. If you cannot (or choose not to) stack, take all the waiting cards and miss your turn.\n' +
+      'Last card: when you play your second-to-last card you must say "Last card!" as you play it. If you forget, any other player can catch you before the next player acts, and you draw 2 cards.',
     endGame: 'A round ends as soon as someone plays their last card (any effect on that card still happens). Rounds continue until a player reaches 150 points.',
     scoring: 'The player who goes out scores the points left in everyone else\'s hands: number cards at face value, Sidestep / Switchback / +2 cards 20, Prism cards 50.',
-    aiHints: 'Hold on to Prism cards for when you are stuck. Use +2 and Sidestep on a player who is close to going out. Change colour to one you hold many of.',
+    aiHints: 'Hold on to Prism cards for when you are stuck. Use +2 and Sidestep on a player who is close to going out. Change colour to one you hold many of. Keep a +2 back to defend against stacked draws. Remember to say "Last card!".',
   };
   const colours = [['Ember', '#e0643f'], ['Lagoon', '#2a95ab'], ['Moss', '#5f9e45'], ['Plum', '#8b5aa6']];
   const start = 'deck';

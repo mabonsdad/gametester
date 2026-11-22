@@ -123,7 +123,7 @@ test('free-form projects are unchanged: no restrictions, turn-end scoring works'
 
 // ------------------------------------------------------------------ shedding + pauses
 import { switchbackProject } from '../../static/js/model.js';
-import { cardEffects, shedColours, shedTop } from '../../static/js/engine.js';
+import { announcementsDue, cardEffects, shedColours, shedTop } from '../../static/js/engine.js';
 
 function playShedTurn(p, st, r) {
   const pid = activePlayer(st).id;
@@ -136,27 +136,49 @@ function playShedTurn(p, st, r) {
     assert.ok(fx.wild || String(stat(card, 'colour')) === st.hand.colour || String(stat(card, 'value')) === st.hand.value);
     const colours = shedColours(p);
     const choose = colours[Math.floor(r() * colours.length)];
-    assert.equal(checkAction(p, st, { type: 'move', card, to: 'discard', actor: pid, choose }), null);
+    // say "Last card!" when due, but forget sometimes
+    const due = announcementsDue(p, st, pid, card);
+    const announce = due.filter(() => r() < 0.6);
+    assert.equal(checkAction(p, st, { type: 'move', card, to: 'discard', actor: pid, choose, announce }), null);
     const nextBefore = st.players[(st.players.findIndex((x) => x.id === pid) + st.dir + st.players.length) % st.players.length];
     const nextHand = st.zones[`${nextBefore.id}.hand`].cards.length;
     const dirBefore = st.dir;
     const roundBefore = st.hand.number;
-    apply(p, st, { type: 'move', card, to: 'discard', actor: pid, choose });
+    const pendingBefore = st.hand.pendingDraw;
+    apply(p, st, { type: 'move', card, to: 'discard', actor: pid, choose, announce });
     const sameRound = st.status === 'playing' && st.hand.number === roundBefore;
     if (!sameRound) return; // went out: the next round has been dealt
     assert.equal(shedTop(p, st), card);
     if (fx.wild) assert.equal(st.hand.colour, choose);
     else assert.equal(st.hand.colour, String(stat(card, 'colour')));
     if (fx.reverse) assert.equal(st.dir, -dirBefore);
-    if (fx.draw) assert.equal(st.zones[`${nextBefore.id}.hand`].cards.length, nextHand + fx.draw, 'victim drew');
-    if (fx.draw || fx.skip || (fx.reverse && st.players.length === 2)) {
+    if (fx.draw) {
+      // stacking: nothing drawn yet; the next player faces the running total
+      assert.equal(st.hand.pendingDraw, pendingBefore + fx.draw);
+      assert.equal(activePlayer(st).id, nextBefore.id);
+    } else if (fx.skip || (fx.reverse && st.players.length === 2)) {
       assert.notEqual(activePlayer(st).id, nextBefore.id, 'victim misses a turn');
+    }
+    // a missed "Last card!" can be caught by someone else, sometimes
+    if (st.catchable && r() < 0.5) {
+      const catcher = st.players.find((x) => x.id !== st.catchable.pid).id;
+      const target = st.catchable.pid;
+      const before = st.zones[`${target}.hand`].cards.length;
+      apply(p, st, { type: 'catch', actor: catcher });
+      assert.equal(st.zones[`${target}.hand`].cards.length, before + 2, 'caught player draws 2');
     }
     return;
   }
   if (lm.canDraw) {
     assert.equal(checkAction(p, st, { type: 'draw', actor: pid }), null);
+    const n = st.hand.pendingDraw;
+    const before = st.zones[`${pid}.hand`].cards.length;
     apply(p, st, { type: 'draw', actor: pid });
+    if (n) {
+      assert.equal(st.zones[`${pid}.hand`].cards.length, before + n, 'took the stacked cards');
+      assert.notEqual(activePlayer(st).id, pid, 'and missed the turn');
+      assert.equal(st.hand.pendingDraw, 0);
+    }
     return;
   }
   assert.ok(lm.canPass);
@@ -247,4 +269,96 @@ test('pauses: after each trick and each hand, until "continue"', () => {
   apply(p, st, { type: 'continue', actor: 'designer' });
   assert.equal(st.hand.number, 2);
   assert.equal(st.zones['p1.hand'].cards.length, 13);
+});
+
+// ------------------------------------------------------------------ stacking + announcements
+function setHand(p, st, pid, names) {
+  // put all of pid's cards back in the draw pile, then give them the named cards
+  for (const u of [...st.zones[`${pid}.hand`].cards]) apply(p, st, { type: 'move', card: u, to: 'deck', actor: 'designer' });
+  for (const name of names) {
+    const top = shedTop(p, st);
+    const u = Object.values(st.cards).find((c) => c.zone !== `${pid}.hand` && c.uid !== top && p.cards.find((d) => d.id === c.defId).name === name).uid;
+    apply(p, st, { type: 'move', card: u, to: `${pid}.hand`, actor: 'designer' });
+  }
+}
+const uidOf = (p, st, pid, name) => st.zones[`${pid}.hand`].cards.find((u) => p.cards.find((d) => d.id === st.cards[u].defId).name === name);
+
+test('stacking draw cards (same size only)', () => {
+  const p = normalizeProject(switchbackProject());
+  const st = createGame(p, { players: players4, seed: 8 });
+  const [a, b, c, d] = ['p1', 'p2', 'p3', 'p4'];
+  st.turn.active = 0; st.hand.colour = 'Ember'; st.hand.value = '3';
+  setHand(p, st, a, ['Ember +2', 'Ember 5', 'Ember 6']);
+  setHand(p, st, b, ['Lagoon +2', 'Prism +4', 'Moss 1']);
+  setHand(p, st, c, ['Plum 2', 'Plum 3']);
+  apply(p, st, { type: 'move', card: uidOf(p, st, a, 'Ember +2'), to: 'discard', actor: a });
+  assert.equal(activePlayer(st).id, b);
+  assert.equal(st.hand.pendingDraw, 2);
+  const lm = legalMoves(p, st, b);
+  assert.deepEqual(lm.legal, [uidOf(p, st, b, 'Lagoon +2')], 'only the same-size draw card can be stacked');
+  assert.equal(lm.takeCount, 2);
+  assert.match(checkAction(p, st, { type: 'endTurn', actor: b }), /Stack a draw card or take/);
+  assert.match(checkAction(p, st, { type: 'move', card: uidOf(p, st, b, 'Prism +4'), to: 'discard', actor: b }), /stack another draw-2/);
+  apply(p, st, { type: 'move', card: uidOf(p, st, b, 'Lagoon +2'), to: 'discard', actor: b });
+  assert.equal(st.hand.pendingDraw, 4);
+  assert.equal(activePlayer(st).id, c);
+  apply(p, st, { type: 'draw', actor: c });
+  assert.equal(st.zones[`${c}.hand`].cards.length, 6, 'took 4');
+  assert.equal(activePlayer(st).id, d, 'and missed the turn');
+
+  // "any" mode lets a +4 go on a +2
+  p.automation.shedding.stackDraws = 'any';
+  const st2 = createGame(p, { players: players4, seed: 8 });
+  st2.turn.active = 0; st2.hand.colour = 'Ember'; st2.hand.value = '3';
+  setHand(p, st2, a, ['Ember +2', 'Ember 5']);
+  setHand(p, st2, b, ['Prism +4', 'Moss 1']);
+  apply(p, st2, { type: 'move', card: uidOf(p, st2, a, 'Ember +2'), to: 'discard', actor: a });
+  assert.deepEqual(legalMoves(p, st2, b).legal, [uidOf(p, st2, b, 'Prism +4')]);
+});
+
+test('announcements: say it in time, get caught, automatic penalty, tracked in scoring', () => {
+  const p = normalizeProject(switchbackProject());
+  const st = createGame(p, { players: players4, seed: 9 });
+  const [a, b, c] = ['p1', 'p2', 'p3'];
+  st.turn.active = 0; st.hand.colour = 'Ember'; st.hand.value = '3';
+  setHand(p, st, a, ['Ember 5', 'Ember 6']);
+  assert.deepEqual(announcementsDue(p, st, a, uidOf(p, st, a, 'Ember 5')), ['lastCard']);
+  // 1. said in time (separate announce action, then the play)
+  assert.equal(checkAction(p, st, { type: 'announce', id: 'lastCard', actor: b }), 'You can only make an announcement on your own turn.');
+  apply(p, st, { type: 'announce', id: 'lastCard', actor: a });
+  apply(p, st, { type: 'move', card: uidOf(p, st, a, 'Ember 5'), to: 'discard', actor: a });
+  assert.equal(st.catchable, null);
+  assert.equal(st.annStats[a].lastCard.made, 1);
+
+  // 2. forgotten and caught: the catcher's "Catches" counter goes up (scoring rule on the penalty event)
+  st.turn.active = 0; st.hand.colour = 'Ember'; st.hand.value = '3';
+  setHand(p, st, a, ['Ember 7', 'Ember 8']);
+  apply(p, st, { type: 'move', card: uidOf(p, st, a, 'Ember 7'), to: 'discard', actor: a });
+  assert.equal(st.catchable?.pid, a);
+  assert.match(checkAction(p, st, { type: 'catch', actor: a }), /yourself/);
+  apply(p, st, { type: 'catch', actor: c });
+  assert.equal(st.zones[`${a}.hand`].cards.length, 3, '1 + 2 penalty cards');
+  assert.equal(st.annStats[a].lastCard.missed, 1);
+  assert.equal(st.annStats[a].lastCard.caught, 1);
+  assert.equal(st.annStats[c].lastCard.catches, 1);
+  assert.equal(st.players[2].counters.catches, 1);
+
+  // 3. forgotten, nobody catches before the next player acts: the window closes
+  st.turn.active = 0; st.hand.colour = 'Ember'; st.hand.value = '3';
+  setHand(p, st, a, ['Ember 9', 'Ember 4']);
+  apply(p, st, { type: 'move', card: uidOf(p, st, a, 'Ember 9'), to: 'discard', actor: a });
+  assert.ok(st.catchable);
+  apply(p, st, { type: 'draw', actor: activePlayer(st).id });
+  assert.equal(st.catchable, null);
+  assert.match(st.log.map((e) => e.text).join('\n'), /Nobody caught North in time/);
+
+  // 4. automatic penalty mode, and a points penalty instead of cards
+  p.automation.announcements[0] = { ...p.automation.announcements[0], ifMissed: 'auto', penaltyDraw: 0, penaltyCounter: 'score', penaltyAmount: '-10' };
+  st.turn.active = 0; st.hand.colour = 'Ember'; st.hand.value = '3';
+  setHand(p, st, a, ['Ember 1', 'Ember 2']);
+  apply(p, st, { type: 'move', card: uidOf(p, st, a, 'Ember 1'), to: 'discard', actor: a });
+  assert.equal(st.catchable, null);
+  assert.equal(st.players[0].counters.score, -10);
+  assert.equal(st.annStats[a].lastCard.missed, 3);
+  assert.ok(describeAutomation(p).some((l) => l.includes('Announcement "Last card!"')));
 });
