@@ -15,7 +15,11 @@ with any mix of human and AI players.
 * **Automation (optional)**:
   * trick-taking play: follow suit, trumps, partnerships, re-dealing;
   * shedding play: match colour or value, draw, card effects (skip,
-    reverse, draw:N, wild), rounds;
+    reverse, draw:N, wild), optional stacking of draw cards, rounds;
+  * announcements such as "Last card!": required when a formula is true
+    before or after a play; forgetting can be caught by other players or
+    penalised automatically; every one made, missed or caught is counted and
+    can be used in scoring;
   * legal-move checking (off / warn / strict), with legal cards highlighted;
   * scoring rules and end conditions written as simple formulas, e.g.
     `max(0, teamTricks - 6)` or `othersHandSum("points")`.

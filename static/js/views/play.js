@@ -4,7 +4,8 @@ import * as api from '../api.js';
 import { CONTROLLERS, checkAction as aiCheck, isAI, parseResponse, requestTurn } from '../ai.js';
 import {
   activePlayer, apply, automation, cardDef, checkAction as ruleCheck, clone, competitorName, competitors, createGame,
-  cardEffects, describeAutomation, isAutomated, isShedding, isTricks, leadStats, legalMoves, player, shedColours, shedTop, teamOf,
+  announcementRules, announcementsDue, cardEffects, describeAutomation, isAutomated, isShedding, isTricks, leadStats, legalMoves,
+  player, shedColours, shedTop, teamOf,
 } from '../engine.js';
 import { SUITS, uid, zoneDef } from '../model.js';
 import { cardBack, cardFace, confirmDialog, debounce, download, field, fmtTime, h, modal, toast } from '../ui.js';
@@ -191,7 +192,23 @@ export async function renderPlay(root, ctx, args) {
     drawToolbar();
     drawTable();
     drawSide();
+    maybeAiCatch();
     scheduleAuto();
+  }
+
+  // When someone forgets an announcement, AI opponents may catch them (each
+  // missed announcement gets one roll against the rule's AI catch chance).
+  function maybeAiCatch() {
+    const C = st?.catchable;
+    if (!C || C.aiRolled || st.status !== 'playing') return;
+    C.aiRolled = true;
+    const ais = st.players.filter((p) => p.id !== C.pid && isAI(p.controller));
+    const rule = announcementRules(project).find((r) => r.id === C.id);
+    if (!ais.length || Math.random() * 100 >= Number(rule?.aiCatch ?? 70)) return;
+    const catcher = ais[Math.floor(Math.random() * ais.length)];
+    setTimeout(() => {
+      if (!disposed && st.catchable && st.catchable.pid === C.pid && st.catchable.id === C.id) commit({ type: 'catch', actor: catcher.id });
+    }, 400);
   }
 
   // ------------------------------------------------------------ actions
@@ -236,7 +253,7 @@ export async function renderPlay(root, ctx, args) {
     if (!view.auto || aiBusy || st.status !== 'playing' || st.pending) return;
     if (!isAI(activePlayer(st).controller)) return;
     if (activePlayer(st).controller === 'ai-manual') return; // needs a human anyway
-    autoTimer = setTimeout(() => runAiTurn(), 700);
+    autoTimer = setTimeout(() => runAiTurn(), st.catchable ? 1100 : 700);
   }
 
   async function runAiTurn() {
@@ -455,6 +472,8 @@ export async function renderPlay(root, ctx, args) {
         h('span', { class: 'seat-name' }, active ? '▶ ' : '', p.name, winner ? ' 🏆' : ''),
         st.hand && st.dealer === p.seat ? h('span', { class: 'dealer-chip', title: 'Dealer' }, 'Dealer') : null,
         isShedding(project) && st.status === 'playing' && st.zones[`${p.id}.hand`]?.cards.length === 1 ? h('span', { class: 'lastcard-chip' }, 'Last card!') : null,
+        st.announce?.pid === p.id ? h('span', { class: 'announce-chip', title: 'Announced this turn' }, `📣 ${st.announce.ids.map((id) => announcementRules(project).find((r) => r.id === id)?.label || id).join(', ')}`) : null,
+        st.catchable?.pid === p.id ? h('span', { class: 'missed-chip', title: 'Forgot to announce - can be caught' }, `⚠ didn't say "${st.catchable.label}"`) : null,
         team ? h('span', { class: `team-chip ${team.id}`, title: team.name }, team.name.split(' (')[0]) : null,
         h('span', { class: `ctrl ${isAI(p.controller) ? 'ai' : 'human'}`, title: CONTROLLERS[p.controller]?.label }, isAI(p.controller) ? 'AI' : 'Human'),
         h('span', { class: 'counters' },
@@ -637,12 +656,21 @@ export async function renderPlay(root, ctx, args) {
         `Last trick: ${player(st, st.lastTrick.winner).name} won with ${cname(st.lastTrick.winningCard)} - `,
         st.lastTrick.plays.map((t) => `${player(st, t.pid).name} ${cname(t.card)}`).join(', ')) : null,
       phases.length ? h('div', { class: 'phases' }, phases.map((ph, i) => h('span', { class: `phase ${i === st.turn.phase ? 'current' : i < st.turn.phase ? 'done' : ''}`, title: ph.description }, ph.name))) : null,
+      catchBox(),
       aiBusy ? h('div', { class: 'ai-busy' }, h('span', { class: 'spinner' }), h('span', {}, aiBusy.message),
         aiBusy.cancel ? h('button', { class: 'btn small', onclick: () => aiBusy.cancel() }, 'Cancel') : null) : null,
       h('div', { class: 'row gap wrap' },
         ai ? h('button', { class: 'btn primary', disabled: !!aiBusy, onclick: runAiTurn }, `▶ Play ${p.name}'s turn`) : null,
         phases.length > 1 && !automated ? h('button', { class: 'btn', disabled: !!aiBusy || st.turn.phase >= phases.length - 1, onclick: () => commit({ type: 'phase' }) }, 'Next phase') : null,
-        shedding && !ai && lm?.canDraw ? h('button', { class: `btn ${lm.legal.length ? '' : 'primary'}`, onclick: () => commit({ type: 'draw' }) }, 'Draw a card') : null,
+        shedding && !ai && lm?.canDraw ? h('button', { class: `btn ${lm.legal.length ? '' : 'primary'}`, onclick: () => commit({ type: 'draw' }) }, lm.takeCount ? `Take ${lm.takeCount} cards` : 'Draw a card') : null,
+        !ai && st.status === 'playing' ? announcementRules(project).map((r) => {
+          const said = st.announce?.pid === p.id && st.announce.ids.includes(r.id);
+          return h('button', {
+            class: `btn announce-btn ${said ? 'said' : ''}`, disabled: said,
+            title: said ? 'Announced - it counts for your next play' : `Say "${r.label}" (counts for your next play this turn)`,
+            onclick: () => commit({ type: 'announce', id: r.id }),
+          }, said ? `📣 "${r.label}" ✓` : `📣 Say "${r.label}"`);
+        }) : null,
         shedding && !ai && lm?.canPass ? h('button', { class: 'btn', onclick: () => commit({ type: 'endTurn' }) }, 'Pass') : null,
         automated ? null : h('button', { class: `btn ${ai ? '' : 'primary'}`, disabled: !!aiBusy, onclick: () => commit({ type: 'endTurn' }) }, 'End turn ⏎'),
         h('button', { class: 'btn', disabled: !!aiBusy, onclick: undo, title: 'Ctrl+Z' }, 'Undo'),
@@ -650,6 +678,22 @@ export async function renderPlay(root, ctx, args) {
       h('label', { class: 'inline small' },
         h('input', { type: 'checkbox', checked: view.auto, onchange: (e) => { view.auto = e.target.checked; saveView(); scheduleAuto(); } }),
         ' Auto-play AI seats (stops at human seats)'));
+  }
+
+  function catchBox() {
+    const C = st.catchable;
+    if (!C || st.status !== 'playing') return null;
+    const target = player(st, C.pid);
+    const humans = st.players.filter((x) => x.id !== C.pid && !isAI(x.controller));
+    const rule = announcementRules(project).find((r) => r.id === C.id);
+    const pen = rule && parseInt(rule.penaltyDraw, 10) > 0 ? ` (+${rule.penaltyDraw} cards)` : '';
+    return h('div', { class: 'catch-box' },
+      h('b', {}, `⚠ ${target.name} didn't say "${C.label}"!`),
+      h('span', { class: 'muted small' }, ' Catch them before the next player acts.'),
+      h('div', { class: 'row gap wrap' },
+        humans.length
+          ? humans.map((x) => h('button', { class: 'btn small catch-btn', onclick: () => commit({ type: 'catch', actor: x.id }) }, `Catch!${pen} - as ${x.name}`))
+          : h('button', { class: 'btn small catch-btn', onclick: () => commit({ type: 'catch', actor: 'designer' }) }, `Catch${pen} (referee)`)));
   }
 
   function inspector() {
@@ -670,7 +714,9 @@ export async function renderPlay(root, ctx, args) {
     const strict = automation(project).enforce === 'strict';
     const playBox = playable ? h('div', { class: 'play-box' },
       h('button', { class: 'btn primary', disabled: !!why && strict, onclick: () => playCard(selected) }, `Play ${def.name} ▶`),
-      why ? h('p', { class: 'warn-box small' }, `Not allowed: ${why}`) : h('p', { class: 'muted small' }, 'This is a legal play.')) : null;
+      why ? h('p', { class: 'warn-box small' }, `Not allowed: ${why}`) : h('p', { class: 'muted small' }, 'This is a legal play.'),
+      ...announcementsDue(project, st, lm.pid, selected).map((id) => announcementRules(project).find((r) => r.id === id))
+        .filter((r) => r?.remind).map((r) => h('p', { class: 'small announce-hint' }, `📣 Playing this means you must say "${r.label}" first.`))) : null;
     const tools = h('div', { class: 'stack' },
       h('span', { class: 'field-label' }, `Move (as ${me.name})`),
       h('div', { class: 'row gap wrap' }, quick.map(([label, zid]) => h('button', { class: 'btn small', onclick: () => commit({ type: 'move', card: selected, to: zid }) }, '→ ' + label))),
@@ -720,6 +766,17 @@ export async function renderPlay(root, ctx, args) {
       const lost = st.players.map((p) => ({ p, low: st.assessments.filter((a) => a.player === p.id && a.winConfidence != null && a.winConfidence <= 10).length }))
         .filter((x) => x.low >= 3);
       if (lost.length) out.append(h('p', { class: 'warn-box' }, `Possible "known loser" problem: ${lost.map((x) => `${x.p.name} rated their chances at 10% or less on ${x.low} turns`).join('; ')}.`));
+    }
+    const rules = announcementRules(project);
+    if (rules.length) {
+      out.append(h('h3', {}, 'Announcements'),
+        h('table', { class: 'mini-table' },
+          h('thead', {}, h('tr', {}, ['Player', 'Said', 'Missed', 'Caught', 'Catches', 'Unneeded'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, rules.flatMap((r) => st.players.map((x) => {
+            const a = st.annStats?.[x.id]?.[r.id] || {};
+            return h('tr', {}, h('td', {}, rules.length > 1 ? `${x.name} - ${r.label}` : x.name),
+              ['made', 'missed', 'caught', 'catches', 'unnecessary'].map((k) => h('td', {}, a[k] || 0)));
+          })))));
     }
     const feedback = st.log.filter((e) => e.data?.kind === 'feedback' || e.actor === 'designer');
     if (feedback.length) out.append(h('h3', {}, 'Notes & feedback'), h('ul', { class: 'facts' }, feedback.map((e) => h('li', {}, h('span', { class: 'log-turn' }, `t${e.turn}`), e.text))));

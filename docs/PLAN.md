@@ -59,7 +59,7 @@ browser (static/)                               server.py (optional, stdlib)
 | `turn` | `phases[]`, `drawAtStart {count, from}`, `firstPlayer`, `direction` |
 | `rules` | Free text: overview, objective, turn rules, end of game, scoring, AI hints |
 | `cards[]` | `{id, name, description, rules, count, startZone, color, image, imageMode, stats{}, tags[]}` |
-| `automation` | `style` (free \| tricks \| shedding), `enforce` (off \| warn \| strict), `autoScore`, `teams`, `tricks{zone, wonZone, suitStat, rankStat, followSuit, trump, trumpSuit, firstLead, redeal}`, `shedding{drawZone, discardZone, colourStat, valueStat, effectStat, wildColour, playDrawn}`, `scoring[]{event, who, counter, expr, when, label}`, `endWhen[]{at, expr, winner, label}` |
+| `automation` | `style` (free \| tricks \| shedding), `enforce` (off \| warn \| strict), `autoScore`, `teams`, `tricks{zone, wonZone, suitStat, rankStat, followSuit, trump, trumpSuit, firstLead, redeal}`, `shedding{drawZone, discardZone, colourStat, valueStat, effectStat, wildColour, playDrawn, stackDraws}`, `announcements[]{id, label, check, when, ifMissed, penaltyDraw, penaltyCounter, penaltyAmount, aiCatch, remind}`, `scoring[]{event, who, counter, expr, when, label}`, `endWhen[]{at, expr, winner, label}` |
 | `cardBack` | Colour / image / label |
 
 ### Game state (inside a session file)
@@ -180,13 +180,26 @@ insights (score chart, lead changes, AI feelings, notes).
     hands); Switchback sample, an original game in the Crazy Eights family.
   * Optional pauses after each trick and each hand or round; a game-over screen
     with standings and "Play again".
+  * Stacking draw cards (off / same size / any).
+  * Announcements: a general "say something around a play" mechanic.
+    * Rule fields: label, a formula for when it is required, checked before
+      or after the play, and what happens if it is forgotten (others can
+      catch the player until the next player acts / automatic penalty /
+      only recorded). Penalties are draw N and/or a counter change.
+    * Interface: an announce button for players; AI players add `announce` to
+      their move.
+    * Tracking: per-player counts of announcements made, missed, caught,
+      catches and unneeded, shown in Insights. Scoring can use the
+      `announcement` and `penalty` events and the announced() / missed() /
+      caught() / catches() formulas.
 * Next:
   * Free-form legality rules, e.g. "play cards matching colour or number", a
     hand limit, or one play per turn. These would reuse the same check/highlight path.
   * Bidding/contract phases (Oh Hell, Spades) as an optional step before the
     first trick of a hand.
-  * More shedding options: stacking draw cards, challenging a draw-four, a
-    "call your last card" penalty, house rules like jump-in.
+  * More shedding options: challenging a draw-four, jump-in.
+  * Announcements by players who are not on turn, e.g. "jump in" or
+    "challenge". A wider "reactions" mechanic could reuse the catch window.
   * Hotseat "pass the device" screen; touch drag for tablets.
   * Card templates (layout per card type), CSV import, print-and-play PDF sheets.
   * Optional structured effects per card (e.g. `draw 2`, `+3 score`) that the

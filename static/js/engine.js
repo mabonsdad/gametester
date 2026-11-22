@@ -150,6 +150,9 @@ export function createGame(project, { players, seed, options } = {}) {
     lastHand: null,
     pending: null, // a pause waiting for 'continue' (see options)
     dir: 1, // 1 = the project's turn direction, -1 = reversed
+    announce: null, // announcements made this turn, before playing: { pid, ids }
+    catchable: null, // a missed announcement that other players can still catch
+    annStats: {}, // per player, per announcement: made / missed / caught / catches / unnecessary
     options: { pauseTricks: false, pauseHands: false, ...(options || {}) },
     created: Date.now(),
   };
@@ -286,6 +289,10 @@ export function apply(project, st, action) {
   const a = action || {};
   const actor = a.actor || activePlayer(st).id;
   const who = player(st, actor)?.name || actor;
+  if (st.catchable && ['move', 'draw', 'endTurn'].includes(a.type) && player(st, actor)) {
+    log(st, 'system', 'announce', `Nobody caught ${player(st, st.catchable.pid).name} in time.`);
+    st.catchable = null;
+  }
   switch (a.type) {
     case 'move': {
       const c = st.cards[a.card];
@@ -293,17 +300,22 @@ export function apply(project, st, action) {
       const to = resolveZone(st, a.to, actor);
       if (!to) throw new Error(`no zone "${a.to}"`);
       const fromZid = c.zone;
-      if (isShedPlay(project, st, fromZid, to)) {
+      if (isShedPlay(project, st, fromZid, to) || isTrickPlay(project, st, fromZid, to)) {
         const owner = st.zones[fromZid].owner;
+        const said = announcedIds(st, owner, a.announce);
+        const before = requiredAnnouncements(project, st, owner, 'beforePlay');
         placeCard(project, st, a.card, to, { faceUp: true });
-        playShed(project, st, owner, a.card, a.choose);
-        break;
-      }
-      if (isTrickPlay(project, st, fromZid, to)) {
-        const owner = st.zones[fromZid].owner;
-        placeCard(project, st, a.card, to, { faceUp: true });
-        log(st, owner, 'play', `${player(st, owner).name} played ${cardName(project, st, a.card)}`, { data: { card: a.card, from: fromZid, to } });
-        playToTrick(project, st, owner, a.card);
+        const after = requiredAnnouncements(project, st, owner, 'afterPlay');
+        const handNo = st.hand.number;
+        if (isShedding(project)) {
+          playShed(project, st, owner, a.card, a.choose);
+        } else {
+          log(st, owner, 'play', `${player(st, owner).name} played ${cardName(project, st, a.card)}`, { data: { card: a.card, from: fromZid, to } });
+          playToTrick(project, st, owner, a.card);
+        }
+        // Announcements are settled after the play, unless the hand/round just ended.
+        if (st.status === 'playing' && st.hand?.number === handNo) settleAnnouncements(project, st, owner, { ...before, ...after }, said);
+        if (st.announce?.pid === owner) st.announce = null;
         break;
       }
       const wasPublic = isPublic(project, st, a.card);
@@ -361,6 +373,23 @@ export function apply(project, st, action) {
       log(st, actor, 'phase', `Phase: ${phases[st.turn.phase]?.name || st.turn.phase + 1}`);
       break;
     }
+    case 'announce': {
+      const rule = announcementRules(project).find((r) => r.id === a.id);
+      if (!rule) throw new Error(`no announcement "${a.id}"`);
+      if (!st.announce || st.announce.pid !== actor) st.announce = { pid: actor, ids: [] };
+      if (!st.announce.ids.includes(a.id)) st.announce.ids.push(a.id);
+      log(st, actor, 'announce', `${who}: "${rule.label}"`, { data: { id: a.id } });
+      break;
+    }
+    case 'catch': {
+      const C = st.catchable;
+      if (!C) throw new Error('there is nobody to catch');
+      if (actor === C.pid) throw new Error('you cannot catch yourself');
+      st.catchable = null;
+      const rule = announcementRules(project).find((r) => r.id === C.id);
+      applyPenalty(project, st, C.pid, rule, player(st, actor) ? actor : null, true);
+      break;
+    }
     case 'continue': {
       const pause = st.pending;
       if (!pause) break;
@@ -378,6 +407,11 @@ export function apply(project, st, action) {
         break;
       }
       log(st, actor, 'endTurn', `${who} ended their turn`);
+      if (announcementRules(project).length) {
+        const pid = activePlayer(st).id;
+        settleAnnouncements(project, st, pid, requiredAnnouncements(project, st, pid, 'afterPlay'), announcedIds(st, pid, a.announce));
+        st.announce = null;
+      }
       fireScoring(project, st, 'turnEnd', { actor: activePlayer(st).id });
       snapshotTimeline(st);
       if (checkEnd(project, st, 'turnEnd')) break;
@@ -520,8 +554,12 @@ function startHand(project, st, first) {
     value: null,
     drew: false,
     drawn: null,
+    pendingDraw: 0, // shedding with stacking: cards waiting for the next player
+    pendingDrawSize: 0,
   };
   st.lastTrick = null;
+  st.announce = null;
+  st.catchable = null;
   log(st, 'system', 'hand', `${isShedding(project) ? 'Round' : 'Hand'} ${st.hand.number}: ${st.players[st.dealer].name} deals.`);
   for (const step of project.setup || []) {
     if (!first && step.op === 'counter') continue; // keep scores between hands
@@ -697,6 +735,10 @@ export function formulaScope(project, st, pid, ctx = {}) {
     othersHandSum: (stat) => st.players.filter((o) => o.id !== pid)
       .reduce((s, o) => s + (st.zones[`${o.id}.hand`]?.cards || []).reduce((t, u) => t + (Number(statOf(project, st, u, stat)) || 0), 0), 0),
     othersCardsInHand: st.players.filter((o) => o.id !== pid).reduce((s, o) => s + (st.zones[`${o.id}.hand`]?.cards.length || 0), 0),
+    announced: (id) => st.annStats?.[pid]?.[id]?.made || 0,
+    missed: (id) => st.annStats?.[pid]?.[id]?.missed || 0,
+    caught: (id) => st.annStats?.[pid]?.[id]?.caught || 0,
+    catches: (id) => st.annStats?.[pid]?.[id]?.catches || 0,
     zoneCount: (zone, stat, value) => zoneCards(zone).filter((u) => matches(u, stat, value)).length,
     zoneSum: (zone, stat) => zoneCards(zone).reduce((s, u) => s + (Number(statOf(project, st, u, stat)) || 0), 0),
     wonCount: (stat, value) => zoneCards(T.wonZone).filter((u) => matches(u, stat, value)).length,
@@ -712,6 +754,8 @@ export const FORMULA_HELP = [
   ['wentOut', '1 for the player who emptied their hand this round (shedding games), else 0'],
   ['handSum("points"), othersHandSum("points")', 'sum of a stat over their own hand / everyone else\'s hands'],
   ['othersCardsInHand', "number of cards in everyone else's hands"],
+  ['announced("lastCard"), missed("lastCard")', 'times the player made / missed a required announcement (whole game)'],
+  ['caught("lastCard"), catches("lastCard")', 'times the player was caught / caught someone else'],
   ['any counter id (e.g. score)', "that player's counter"],
   ['wonCount("suit","Hearts")', 'cards in their tricks-won zone (optionally matching a stat)'],
   ['wonSum("points")', 'sum of a stat over their tricks-won zone'],
@@ -783,7 +827,8 @@ function checkEnd(project, st, at) {
 // (playDrawn) or the turn passes. Effects come from a card stat (default
 // "effect"), as space-separated words: skip, reverse, wild, draw:N.
 
-const SHED_DEFAULTS = { drawZone: 'deck', discardZone: 'discard', colourStat: 'colour', valueStat: 'value', effectStat: 'effect', wildColour: 'Wild', playDrawn: true };
+const SHED_DEFAULTS = { drawZone: 'deck', discardZone: 'discard', colourStat: 'colour', valueStat: 'value', effectStat: 'effect', wildColour: 'Wild', playDrawn: true, stackDraws: 'off' };
+const stacking = (project) => ['same', 'any'].includes(shedCfg(project).stackDraws);
 const shedCfg = (project) => ({ ...SHED_DEFAULTS, ...(automation(project).shedding || {}) });
 
 export function cardEffects(project, st, uid) {
@@ -888,6 +933,7 @@ function startShedRound(project, st) {
 function shedAdvance(project, st, pid, skip) {
   st.hand.drew = false;
   st.hand.drawn = null;
+  if (st.announce?.pid === pid) st.announce = null;
   st.turn.active = nextSeat(project, st, player(st, pid).seat, 1 + skip);
   st.turn.number++;
 }
@@ -922,7 +968,19 @@ function playShed(project, st, pid, uid, choose) {
     if (st.players.length === 2) skip = 1;
   }
   const victim = st.players[nextSeat(project, st, player(st, pid).seat)];
-  if (fx.draw) {
+  const out = !st.zones[`${pid}.hand`].cards.length;
+  if (fx.draw && stacking(project)) {
+    H.pendingDraw = (H.pendingDraw || 0) + fx.draw;
+    H.pendingDrawSize = fx.draw;
+    if (out) {
+      // Going out ends the round: the waiting cards are drawn now.
+      const got = drawCards(project, st, victim.id, H.pendingDraw);
+      log(st, 'system', 'effect', `${victim.name} draws ${got.length}.`);
+      H.pendingDraw = 0;
+    } else {
+      log(st, 'system', 'effect', `${victim.name} must stack a draw card or take ${H.pendingDraw} card(s).`);
+    }
+  } else if (fx.draw) {
     const got = drawCards(project, st, victim.id, fx.draw);
     log(st, 'system', 'effect', `${victim.name} draws ${got.length} and misses a turn: ${got.map((u) => cardName(project, st, u)).join(', ')}.`,
       { publicText: `${victim.name} draws ${got.length} and misses a turn.` });
@@ -944,6 +1002,16 @@ function shedDraw(project, st, pid) {
   const S = shedCfg(project);
   const H = st.hand;
   const who = player(st, pid).name;
+  if (H.pendingDraw > 0) {
+    const n = H.pendingDraw;
+    H.pendingDraw = 0;
+    H.pendingDrawSize = 0;
+    const got = drawCards(project, st, pid, n);
+    log(st, pid, 'draw', `${who} takes ${got.length} card(s) and misses the turn: ${got.map((u) => cardName(project, st, u)).join(', ')}.`,
+      { publicText: `${who} takes ${got.length} card(s) and misses the turn.` });
+    shedAdvance(project, st, pid, 0);
+    return;
+  }
   const got = drawCards(project, st, pid, 1);
   H.drew = true;
   H.drawn = got[0] || null;
@@ -967,6 +1035,21 @@ function shedLegal(project, st, pid, out) {
   out.target = S.discardZone;
   out.colours = shedColours(project);
   const need = `${H.colour}${H.value != null ? ` or a ${H.value}` : ''}`;
+  if (H.pendingDraw > 0) {
+    const any = shedCfg(project).stackDraws === 'any';
+    for (const u of hand) {
+      const d = cardEffects(project, st, u).draw;
+      const ok = d > 0 && (any || d === H.pendingDrawSize);
+      out.cards[u] = ok ? '' : `${H.pendingDraw} card(s) are waiting for you: stack ${any ? 'a draw card' : `another draw-${H.pendingDrawSize} card`} or take them.`;
+      if (ok) out.legal.push(u);
+    }
+    out.canDraw = true;
+    out.takeCount = H.pendingDraw;
+    out.summary = out.legal.length
+      ? `Stack a draw card to pass the penalty on, or take ${H.pendingDraw} card(s) and miss your turn.`
+      : `Take ${H.pendingDraw} card(s) - you have no draw card to stack.`;
+    return out;
+  }
   if (H.drew) {
     for (const u of hand) {
       const ok = u === H.drawn && canPlayOn(project, st, u);
@@ -985,6 +1068,110 @@ function shedLegal(project, st, pid, out) {
   out.canDraw = true;
   out.summary = out.legal.length ? `Play a ${need} card (or a wild), or draw a card.` : `No card matches ${need}: draw a card.`;
   return out;
+}
+
+// ------------------------------------------------------------------ announcements
+// Things a player must say around playing a card ("Last card!"). Each rule:
+//   { id, label, check: 'afterPlay' | 'beforePlay', when: formula,
+//     ifMissed: 'catch' | 'auto' | 'none', penaltyDraw, penaltyCounter,
+//     penaltyAmount: formula, aiCatch: % chance an AI opponent catches, remind }
+// 'when' is evaluated for the player who plays, before or after the card
+// leaves their hand. Free-form games check 'afterPlay' rules at end of turn.
+
+export const announcementRules = (project) => (automation(project).announcements || []).filter((r) => r.id && r.label);
+
+function annStat(st, pid, id) {
+  st.annStats ||= {};
+  st.annStats[pid] ||= {};
+  return (st.annStats[pid][id] ||= { made: 0, missed: 0, caught: 0, catches: 0, unnecessary: 0 });
+}
+
+function announcedIds(st, pid, extra) {
+  const ids = st.announce?.pid === pid ? [...st.announce.ids] : [];
+  for (const id of [].concat(extra || [])) if (!ids.includes(id)) ids.push(id);
+  return ids;
+}
+
+function requiredAnnouncements(project, st, pid, check) {
+  const out = {};
+  for (const r of announcementRules(project)) {
+    if ((r.check || 'afterPlay') !== check || !r.when) continue;
+    try {
+      out[r.id] = !!runExpr(r.when, formulaScope(project, st, pid));
+    } catch (e) {
+      log(st, 'system', 'note', `⚠ Announcement "${r.label}" condition failed: ${e.message}`);
+    }
+  }
+  return out;
+}
+
+// Which announcements playing `uid` now would require of pid (for bots and reminders).
+export function announcementsDue(project, st, pid, uid) {
+  const rules = announcementRules(project);
+  if (!rules.length || !st.hand) return [];
+  const before = requiredAnnouncements(project, st, pid, 'beforePlay');
+  const sim = clone(st);
+  sim.log = [];
+  const target = isShedding(project) ? shedCfg(project).discardZone : resolveZone(sim, automation(project).tricks.zone, pid);
+  if (!target || !sim.cards[uid]) return [];
+  placeCard(project, sim, uid, target, { faceUp: true });
+  const after = requiredAnnouncements(project, sim, pid, 'afterPlay');
+  return rules.filter((r) => before[r.id] || after[r.id]).map((r) => r.id);
+}
+
+function settleAnnouncements(project, st, pid, required, said) {
+  const name = player(st, pid).name;
+  for (const r of announcementRules(project)) {
+    const need = !!required[r.id];
+    const made = said.includes(r.id);
+    const s = annStat(st, pid, r.id);
+    if (need && made) {
+      s.made++;
+      log(st, 'system', 'announce', `${name} said "${r.label}" in time.`);
+      fireScoring(project, st, 'announcement', { actor: pid });
+    } else if (need && !made) {
+      s.missed++;
+      if (r.ifMissed === 'auto') {
+        applyPenalty(project, st, pid, r, null);
+      } else if (r.ifMissed === 'none') {
+        log(st, 'system', 'announce', `${name} did not say "${r.label}" (no penalty in this game).`);
+      } else {
+        st.catchable = { pid, id: r.id, label: r.label };
+        log(st, 'system', 'announce', `${name} did not say "${r.label}"! Any other player can catch them until the next player acts.`);
+      }
+    } else if (made) {
+      s.unnecessary++;
+      log(st, 'system', 'announce', `${name} said "${r.label}" but did not need to.`);
+    }
+  }
+}
+
+function applyPenalty(project, st, pid, rule, catcher, viaCatch = false) {
+  const name = player(st, pid).name;
+  const parts = [];
+  const n = parseInt(rule?.penaltyDraw, 10) || 0;
+  if (n > 0 && isShedding(project) && st.hand) {
+    const got = drawCards(project, st, pid, n);
+    parts.push(`draws ${got.length} card(s)`);
+  }
+  if (rule?.penaltyCounter && rule.penaltyAmount) {
+    try {
+      const amount = Number(runExpr(rule.penaltyAmount, formulaScope(project, st, pid))) || 0;
+      const p = player(st, pid);
+      if (rule.penaltyCounter in p.counters && amount) {
+        p.counters[rule.penaltyCounter] += amount;
+        parts.push(`${amount > 0 ? '+' : ''}${amount} ${project.counters.find((c) => c.id === rule.penaltyCounter)?.name || rule.penaltyCounter}`);
+      }
+    } catch (e) {
+      log(st, 'system', 'note', `⚠ Penalty for "${rule.label}" failed: ${e.message}`);
+    }
+  }
+  if (viaCatch) annStat(st, pid, rule.id).caught++;
+  if (catcher) annStat(st, catcher, rule.id).catches++;
+  const how = catcher ? `was caught by ${player(st, catcher).name}` : viaCatch ? 'was caught by the referee' : 'forgot';
+  log(st, 'system', 'penalty', `${name} ${how}: "${rule?.label}" was not said - ${parts.join(', ') || 'no penalty'}.`,
+    { data: { player: pid, catcher, id: rule?.id } });
+  fireScoring(project, st, 'penalty', { actor: pid, winner: catcher || undefined });
 }
 
 // ------------------------------------------------------------------ legal moves
@@ -1033,6 +1220,14 @@ export function checkAction(project, st, action) {
   if (!player(st, actor)) return null;
   if (!isAutomated(project)) return null;
   if (st.pending && action.type !== 'note') return 'The game is paused - press Next to continue first.';
+  if (action.type === 'announce') {
+    if (!announcementRules(project).some((r) => r.id === action.id)) return `There is no announcement "${action.id}" in this game.`;
+    return actor !== activePlayer(st).id ? 'You can only make an announcement on your own turn.' : null;
+  }
+  if (action.type === 'catch') {
+    if (!st.catchable) return 'There is nobody to catch.';
+    return st.catchable.pid === actor ? 'You cannot catch yourself.' : null;
+  }
   if (isShedding(project)) return checkShed(project, st, action, actor);
   const T = A.tricks;
   const trickName = zoneDef(project, T.zone)?.name || 'trick';
@@ -1073,7 +1268,7 @@ function checkShed(project, st, action, actor) {
       return turnMsg || legalMoves(project, st, actor).cards[action.card] || null;
     }
     case 'draw': return turnMsg || (st.hand.drew ? 'You have already drawn this turn - play the drawn card or pass.' : null);
-    case 'endTurn': return turnMsg || (st.hand.drew ? null : 'You must play a card or draw before you can pass.');
+    case 'endTurn': return turnMsg || (st.hand.pendingDraw ? `Stack a draw card or take the ${st.hand.pendingDraw} waiting card(s).` : st.hand.drew ? null : 'You must play a card or draw before you can pass.');
     case 'flip': case 'shuffle': case 'phase': return `"${action.type}" is not part of this game - play a card or draw.`;
     case 'counter': return A.autoScore ? 'Scoring is automatic in this game.' : null;
     default: return null;
@@ -1104,10 +1299,23 @@ export function describeAutomation(project) {
     lines.push(`Shedding: on your turn, play one card from your hand onto the ${zname(S.discardZone)} if it matches the current colour (card stat "${S.colourStat}") or value (stat "${S.valueStat}") of the top card, or is a wild card.`);
     lines.push(`If you cannot or do not want to play, draw one card from the ${zname(S.drawZone)}. ${S.playDrawn ? 'If the drawn card can be played you may play it straight away, or pass and keep it; if not, the turn passes.' : 'Your turn then ends.'}`);
     lines.push(`Card effects (card stat "${S.effectStat}"): skip - the next player misses a turn; reverse - the direction of play changes (with 2 players it acts as skip); draw:N - the next player draws N cards and misses their turn; wild - play it on anything and choose the colour to follow${S.wildColour ? ` (cards whose colour is "${S.wildColour}" are wild)` : ''}.`);
+    if (S.stackDraws === 'same' || S.stackDraws === 'any') {
+      lines.push(`Stacking: when a draw card is played on you, you may play ${S.stackDraws === 'same' ? 'another draw card of the same size (+2 on +2, +4 on +4)' : 'any draw card'} to pass the total on to the next player; otherwise you take all the waiting cards and miss your turn.`);
+    }
     lines.push('The starting card is never an action or wild card. When the draw pile runs out, the discard pile (except its top card) is shuffled to form a new one.');
     lines.push((A.endWhen || []).length ? 'The first player to empty their hand wins the round; rounds are scored and a new round is dealt until the game ends.' : 'The first player to empty their hand wins the game.');
   } else {
     lines.push('Free-form: players (or AI seats) move cards and apply the rules themselves.');
+  }
+  for (const r of announcementRules(project)) {
+    const missed = {
+      catch: 'any other player may catch them until the next player acts',
+      auto: 'the penalty is applied automatically',
+      none: 'nothing happens (it is only recorded)',
+    }[r.ifMissed || 'catch'];
+    const pen = [parseInt(r.penaltyDraw, 10) > 0 && isShedding(project) ? `draw ${r.penaltyDraw} card(s)` : '',
+      r.penaltyCounter && r.penaltyAmount ? `${r.penaltyAmount} to ${cname(r.penaltyCounter)}` : ''].filter(Boolean).join(' and ');
+    lines.push(`Announcement "${r.label}" (id ${r.id}): must be said ${r.check === 'beforePlay' ? 'before' : 'when'} playing a card if ${r.when} ${r.check === 'beforePlay' ? 'before' : 'after'} the play. If a player forgets, ${missed}${pen && r.ifMissed !== 'none' ? `; penalty: ${pen}` : ''}.`);
   }
   if (A.teams === 'partners') lines.push('Partnerships: players sitting opposite each other are a team (with 4 players, seats 1 & 3 against seats 2 & 4).');
   lines.push(`Legal-move checking: ${ENFORCE[A.enforce] || A.enforce}${A.style === 'free' ? ' (free-form games have no move restrictions)' : ''}.`);

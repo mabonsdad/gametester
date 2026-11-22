@@ -3,7 +3,7 @@
 import { buildSystemPrompt } from '../ai.js';
 import { FORMULA_HELP, describeAutomation } from '../engine.js';
 import { check } from '../expr.js';
-import { END_AT, ENFORCE, LAYOUTS, SCORE_EVENTS, SCORE_WHO, SETUP_OPS, STYLES, slug } from '../model.js';
+import { END_AT, ENFORCE, LAYOUTS, MISSED, SCORE_EVENTS, SCORE_WHO, SETUP_OPS, STACKING, STYLES, blankAnnouncement, slug } from '../model.js';
 import { field, h, modal } from '../ui.js';
 
 export async function renderRules(root, ctx) {
@@ -233,12 +233,39 @@ export async function renderRules(root, ctx) {
             field('Value = card stat', txt(S, 'valueStat', { class: 'mono' })),
             field('Effect = card stat', txt(S, 'effectStat', { class: 'mono' }))),
           h('div', { class: 'grid-3' },
-            field('Colour of wild cards', txt(S, 'wildColour', { placeholder: 'e.g. Wild' })), h('span'), h('span')),
+            field('Colour of wild cards', txt(S, 'wildColour', { placeholder: 'e.g. Wild' })),
+            field('Stacking draw cards', sel(S, 'stackDraws', STACKING)), h('span')),
           h('p', { class: 'muted small' }, 'Effects are words in the effect stat, separated by spaces: skip, reverse, wild, draw:N (e.g. "wild draw:4"). Cards whose colour is the wild colour are wild too. Setup steps (apart from counter steps) re-run every round; put a "move 1 card to the discard pile" step after dealing to turn up the starting card.'),
           (() => {
             const missing = project.cards.filter((c) => c.stats?.[S.colourStat] == null || c.stats?.[S.valueStat] == null);
             return missing.length ? h('p', { class: 'warn-box small' }, `${missing.length} card type(s) have no "${S.colourStat}" or "${S.valueStat}" stat (e.g. ${missing.slice(0, 3).map((c) => c.name).join(', ')}).`) : null;
           })()) : null,
+
+        h('div', {},
+          h('span', { class: 'field-label' }, 'Announcements'),
+          h('p', { class: 'muted small' }, 'Things a player must say around playing a card, like "Last card!". The player clicks an announce button (AI players add "announce" to their move). Every announcement made, missed or caught is counted per player; scoring rules can use the "announcement" and "penalty" events and the announced()/missed()/caught()/catches() formulas.'),
+          A.announcements.length ? h('table', { class: 'edit-table' },
+            h('thead', {}, h('tr', {}, ['Says', 'Id', 'Checked', 'Required when (formula)', 'If forgotten', 'Penalty: draw', 'Penalty: counter', 'amount (formula)', 'AI catch %', 'Remind', ''].map((t) => h('th', {}, t)))),
+            h('tbody', {}, A.announcements.map((r, i) => h('tr', {},
+              h('td', {}, txt(r, 'label', { size: 10 })),
+              h('td', {}, txt(r, 'id', { class: 'mono', size: 8 })),
+              h('td', {}, sel(r, 'check', { afterPlay: 'after the play', beforePlay: 'before the play' })),
+              h('td', {}, formula(r, 'when', 'e.g. cardsInHand == 1')),
+              h('td', {}, sel(r, 'ifMissed', MISSED)),
+              h('td', {}, h('input', { type: 'number', min: 0, max: 20, class: 'narrow', value: r.penaltyDraw ?? 0, oninput: (e) => { r.penaltyDraw = parseInt(e.target.value, 10) || 0; changed(); } })),
+              h('td', {}, sel(r, 'penaltyCounter', { '': '(none)', ...counters() })),
+              h('td', {}, formula(r, 'penaltyAmount', 'e.g. -10')),
+              h('td', {}, h('input', { type: 'number', min: 0, max: 100, class: 'narrow', value: r.aiCatch ?? 70, oninput: (e) => { r.aiCatch = parseInt(e.target.value, 10) || 0; changed(); } })),
+              h('td', {}, h('input', { type: 'checkbox', checked: !!r.remind, title: 'Show players a reminder when a card they select would need this announcement', onchange: (e) => { r.remind = e.target.checked; changed(); } })),
+              h('td', {}, remove(A.announcements, i)))))) : null,
+          h('button', {
+            class: 'btn small', onclick: () => {
+              const a = blankAnnouncement(project);
+              let n = 1;
+              while (A.announcements.some((x) => x.id === a.id)) a.id = `announce${++n}`;
+              A.announcements.push(a); changed(); redraw();
+            },
+          }, '+ Add announcement')),
 
         h('div', {},
           h('span', { class: 'field-label' }, 'Scoring rules'),

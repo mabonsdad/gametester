@@ -6,8 +6,8 @@
 
 import * as api from './api.js';
 import {
-  activePlayer, automation, cardDef, cardEffects, describeAutomation, isShedding, isTricks, isVisibleTo, legalMoves, player,
-  resolveZone, shedTop, teamOf,
+  activePlayer, announcementRules, announcementsDue, automation, cardDef, cardEffects, describeAutomation, isShedding, isTricks,
+  isVisibleTo, legalMoves, player, resolveZone, shedTop, teamOf,
 } from './engine.js';
 import { zoneDef } from './model.js';
 
@@ -90,6 +90,10 @@ Play exactly one card, chosen from the "Legal cards" list in the state. Do not s
 ${ACTION_DOC}
 You may only move cards you can see (your own private zones, face-up public cards) or the top card of a pile.`;
   const automated = describeAutomation(project).join('\n');
+  const anns = announcementRules(project);
+  const annDoc = anns.length
+    ? `\nAnnouncements: to say one, add "announce" to your move action, e.g. {"type":"move","card":"c12","to":"${tricks ? A.tricks.zone : A.shedding?.discardZone || 'discard'}","announce":["${anns[0].id}"]}. Ids: ${anns.map((r) => `${r.id} = "${r.label}" (required when ${r.when}, checked ${r.check === 'beforePlay' ? 'before' : 'after'} your play)`).join('; ')}. Nobody will remind you - forgetting can be penalised.`
+    : '';
   return `You are an AI play-tester controlling one seat in a prototype card game running in a test harness.
 Play to win according to the rules, the way a thoughtful human player would. The rules may be incomplete or ambiguous: choose a sensible interpretation, keep playing, and mention the problem in "designerNotes".
 ${harness}
@@ -104,7 +108,7 @@ ${counters ? `\n## Counters (per player)\n${counters}\n` : ''}
 ${project.cards.map(cardLine).join('\n') || '(no cards defined)'}
 
 # How to respond
-${respond}`;
+${respond}${annDoc}`;
 }
 
 function describeZone(project, st, zid, viewer) {
@@ -154,7 +158,7 @@ Cards in each hand: ${st.players.map((p) => `${p.name} ${st.zones[`${p.id}.hand`
 ${H.drew ? `You have drawn ${nm(H.drawn)} this turn.\n` : ''}
 ${lm.summary}
 Legal cards: ${lm.legal.length ? lm.legal.map(nm).join(', ') : 'none'}
-Other options: ${[lm.canDraw ? 'draw a card ({"type":"draw"})' : '', lm.canPass ? 'pass ({"type":"endTurn"})' : ''].filter(Boolean).join('; ') || 'none'}
+Other options: ${[lm.canDraw ? (lm.takeCount ? `take the ${lm.takeCount} waiting card(s) and miss your turn ({"type":"draw"})` : 'draw a card ({"type":"draw"})') : '', lm.canPass ? 'pass ({"type":"endTurn"})' : ''].filter(Boolean).join('; ') || 'none'}
 ${wilds.length ? `For a wild card, add "choose" with one of: ${lm.colours.join(', ')}.\n` : ''}`;
   } else if (isTricks(project) && st.hand) {
     const H = st.hand;
@@ -230,16 +234,18 @@ export function checkAction(project, st, pid, a) {
 // to a random shared spread zone (or discard), otherwise draws.
 export function randomBot(project, st, pid) {
   const lm = legalMoves(project, st, pid);
+  // Random bots say required announcements only 60% of the time, so penalties get exercised.
+  const say = (card) => announcementsDue(project, st, pid, card).filter(() => Math.random() < 0.6);
   if (lm && isShedding(project)) {
     const card = lm.legal[Math.floor(Math.random() * lm.legal.length)];
     const actions = card
-      ? [{ type: 'move', card, to: lm.target, choose: lm.colours[Math.floor(Math.random() * lm.colours.length)] }]
+      ? [{ type: 'move', card, to: lm.target, choose: lm.colours[Math.floor(Math.random() * lm.colours.length)], announce: say(card) }]
       : lm.canDraw ? [{ type: 'draw' }] : [{ type: 'endTurn' }];
     return { reasoning: 'Random legal move (smoke test).', actions, winConfidence: null, experience: '', designerNotes: '' };
   }
   if (lm) {
     const card = lm.legal[Math.floor(Math.random() * lm.legal.length)];
-    return { reasoning: 'Random legal card (smoke test).', actions: card ? [{ type: 'move', card, to: lm.target }] : [], winConfidence: null, experience: '', designerNotes: '' };
+    return { reasoning: 'Random legal card (smoke test).', actions: card ? [{ type: 'move', card, to: lm.target, announce: say(card) }] : [], winConfidence: null, experience: '', designerNotes: '' };
   }
   const hand = st.zones[`${pid}.hand`]?.cards || [];
   const targets = st.zoneOrder.filter((z) => !st.zones[z].owner && zoneDef(project, st.zones[z].defId)?.layout === 'spread');
