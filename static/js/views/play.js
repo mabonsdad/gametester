@@ -38,6 +38,7 @@ export async function renderPlay(root, ctx, args) {
   let aiBusy = null;
   let autoTimer = null;
   let disposed = false;
+  let lastClick = { uid: null, t: 0 };
 
   const persist = debounce(async () => {
     if (!session || disposed) return;
@@ -173,9 +174,18 @@ export async function renderPlay(root, ctx, args) {
     render();
   }
 
+  // Whose hidden cards are shown. In hotseat view this is the human whose turn
+  // it is; while AI seats play, the view stays with the last human player
+  // (otherwise the table would flip to each bot's hand).
+  let lastHuman = null;
   function viewer() {
     if (view.mode === 'seat') return player(st, view.seat) ? view.seat : st.players[0].id;
-    if (view.mode === 'hotseat') return activePlayer(st).id;
+    if (view.mode === 'hotseat') {
+      const a = activePlayer(st);
+      if (!isAI(a.controller)) { lastHuman = a.id; return a.id; }
+      if (lastHuman && player(st, lastHuman)) return lastHuman;
+      return st.players.find((p) => !isAI(p.controller))?.id || a.id;
+    }
     return null; // overhead: designer sees every hand
   }
 
@@ -375,7 +385,7 @@ export async function renderPlay(root, ctx, args) {
         h('label', { class: 'inline' }, 'View ',
           h('select', { value: view.mode, onchange: (e) => { view.mode = e.target.value; saveView(); render(); } },
             h('option', { value: 'overhead' }, 'Overhead: all hands visible'),
-            h('option', { value: 'hotseat' }, 'Hotseat: active player\'s hand only'),
+            h('option', { value: 'hotseat' }, 'Hotseat: only the current human player\'s hand'),
             h('option', { value: 'seat' }, 'Single seat: one player\'s view'))),
         view.mode === 'seat' ? h('select', { value: viewer(), onchange: (e) => { view.seat = e.target.value; saveView(); render(); } },
           st.players.map((p) => h('option', { value: p.id }, p.name))) : null,
@@ -500,7 +510,8 @@ export async function renderPlay(root, ctx, args) {
         el.classList.remove('drop');
         const card = e.dataTransfer.getData('text/card');
         const lm = legalNow();
-        if (card && lm && zid === lm.target && st.cards[card]?.zone === `${lm.pid}.hand`) playCard(card);
+        if (card && isDrawTop(card, lm)) { if (zid !== st.cards[card].zone) commit({ type: 'draw' }); }
+        else if (card && lm && zid === lm.target && st.cards[card]?.zone === `${lm.pid}.hand`) playCard(card);
         else if (card && st.cards[card]?.zone !== zid) commit({ type: 'move', card, to: zid });
       },
     });
@@ -583,15 +594,56 @@ export async function renderPlay(root, ctx, args) {
     el.dataset.card = cuid;
     const lm = legalNow();
     const inActiveHand = lm && st.cards[cuid].zone === `${lm.pid}.hand`;
+    const humanTurn = st.status === 'playing' && !isAI(activePlayer(st).controller);
     if (inActiveHand && face && automation(project).enforce !== 'off') {
       const why = lm.cards[cuid];
       el.classList.add(why ? 'illegal' : 'legal');
-      el.title = why || 'Legal play - double-click to play it';
+      // Playing is the only thing you can do with a legal card, so a double-click plays it.
+      el.title = why || 'Legal play - double-click to play it (or select it and press Play)';
+    }
+    const drawTop = humanTurn && isDrawTop(cuid, lm);
+    if (drawTop) {
+      el.classList.add('drawable');
+      el.title = lm.takeCount ? `Click to take the ${lm.takeCount} waiting cards` : 'Click (or drag to your hand) to draw a card';
     }
     el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/card', cuid); e.dataTransfer.effectAllowed = 'move'; });
-    el.addEventListener('click', (e) => { e.stopPropagation(); selected = cuid; sideTab = 'card'; drawTable(); drawSide(); });
-    el.addEventListener('dblclick', () => (inActiveHand ? playCard(cuid) : commit({ type: 'flip', card: cuid })));
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (drawTop) { commit({ type: 'draw' }); return; }
+      // Our own double-click detection: the browser's dblclick is unreliable when
+      // anything re-renders between the two clicks (Safari in particular).
+      const now = Date.now();
+      const double = lastClick.uid === cuid && now - lastClick.t < 450;
+      lastClick = { uid: cuid, t: now };
+      if (double) {
+        lastClick = { uid: null, t: 0 };
+        if (inActiveHand && humanTurn) {
+          if (lm.cards[cuid] && automation(project).enforce === 'strict') toast(`Not allowed: ${lm.cards[cuid]}`, 'warn', 4000);
+          else playCard(cuid);
+        } else if (!isAutomated(project)) {
+          commit({ type: 'flip', card: cuid });
+        }
+        return;
+      }
+      selectCard(cuid);
+    });
     return el;
+  }
+
+  // Select without rebuilding the table, so the card stays the same element.
+  function selectCard(cuid) {
+    selected = cuid;
+    sideTab = 'card';
+    tableEl.querySelectorAll('.table-card.selected').forEach((n) => n.classList.remove('selected'));
+    tableEl.querySelectorAll(`.table-card[data-card="${cuid}"]`).forEach((n) => n.classList.add('selected'));
+    drawSide();
+  }
+
+  // Is this the top card of a shedding game's draw pile, and may the active player draw now?
+  function isDrawTop(cuid, lm = legalNow()) {
+    if (!isShedding(project) || !lm || lm.paused || !lm.canDraw) return false;
+    const deck = st.zones[project.automation.shedding.drawZone];
+    return !!deck && deck.cards[deck.cards.length - 1] === cuid;
   }
 
   // ------------------------------------------------------------ sidebar
@@ -651,7 +703,7 @@ export async function renderPlay(root, ctx, args) {
         h('span', { class: 'muted small' }, st.dir === 1 ? 'Direction: ⟳ normal' : 'Direction: ⟲ reversed'),
         h('span', { class: 'muted small' }, `Draw pile: ${st.zones[project.automation.shedding.drawZone]?.cards.length ?? 0}`)) : null,
       lm ? h('div', { class: 'you-can' }, h('b', {}, `${p.name}: `), lm.summary,
-        ai ? null : h('span', { class: 'muted small' }, ' Legal cards are outlined in green - double-click one, or select it and press Play.')) : null,
+        ai ? null : h('span', { class: 'muted small' }, ` Legal cards are outlined in green: double-click one, or select it and press Play (or Enter).${shedding && lm.canDraw ? ' Click the draw pile to draw.' : ''}`)) : null,
       tricks && st.lastTrick ? h('div', { class: 'last-trick small' },
         `Last trick: ${player(st, st.lastTrick.winner).name} won with ${cname(st.lastTrick.winningCard)} - `,
         st.lastTrick.plays.map((t) => `${player(st, t.pid).name} ${cname(t.card)}`).join(', ')) : null,
@@ -840,6 +892,7 @@ export async function renderPlay(root, ctx, args) {
     if (!st || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.querySelector('.modal-overlay')) return;
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); }
     else if (e.key === 'Enter' && st.pending) continuePlay();
+    else if (e.key === 'Enter' && selected && legalNow()?.legal.includes(selected) && !isAI(activePlayer(st).controller)) playCard(selected);
     else if (e.key === 'Enter' && !aiBusy && st.status === 'playing' && !isAI(activePlayer(st).controller) && !isAutomated(project)) commit({ type: 'endTurn' });
     else if (e.key === 'Escape') { selected = null; drawTable(); drawSide(); }
   };

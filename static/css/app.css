@@ -361,3 +361,8 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; }
 .announce-chip { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: #e3f3e9; color: #1f6b3c; }
 .missed-chip { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: #fde8e6; color: #a1261f; font-weight: 700; }
 .announce-hint { color: #8a5a00; margin: 0; }
+
+.table-card.drawable { cursor: pointer; outline: 3px dashed #2e9d5b; outline-offset: 2px; }
+.table-card.drawable:hover { transform: translateY(-4px); }
+.play-toolbar select { max-width: 240px; }
+.play-toolbar label.inline { max-width: 100%; }
