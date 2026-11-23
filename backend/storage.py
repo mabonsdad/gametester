@@ -11,6 +11,7 @@ Key layout (in ./data locally, or in the S3 data bucket on AWS):
 import base64
 import json
 import re
+import secrets
 import time
 import uuid
 from pathlib import PurePosixPath
@@ -148,6 +149,7 @@ def list_sessions(pid):
             "turn": st.get("turn", {}).get("number"),
             "players": [p.get("name") for p in st.get("players", [])],
             "status": st.get("status"),
+            "source": s.get("source"),
         })
     out.sort(key=lambda s: s.get("updated") or 0, reverse=True)
     return out
@@ -229,3 +231,80 @@ def job_list(status=None, provider=None):
         out.append(job)
     out.sort(key=lambda j: j.get("created") or 0)
     return out
+
+
+# ---------------------------------------------------------------- share links
+# A share link lets anyone with the link play one project in the player view,
+# without the test bench password. It can read that project and its images,
+# save its own play sessions and run a capped number of AI turns per day.
+
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+AI_PROVIDERS = ("random", "anthropic", "openai")
+
+
+def _today():
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def share_create(pid, label="", providers=None, daily_limit=300):
+    get_project(pid)  # must exist
+    providers = [p for p in (providers or ["random"]) if p in AI_PROVIDERS] or ["random"]
+    token = secrets.token_urlsafe(18)
+    rec = {
+        "token": token,
+        "projectId": pid,
+        "label": str(label or "Shared game")[:80],
+        "providers": providers,
+        "dailyLimit": max(0, min(int(daily_limit or 0), 5000)),
+        "created": now_ms(),
+        "revoked": False,
+        "usage": {},
+        "plays": 0,
+    }
+    _put(f"shares/{token}.json", rec)
+    return rec
+
+
+def share_get(token, allow_revoked=False):
+    if not isinstance(token, str) or not TOKEN_RE.match(token):
+        raise StorageError("Link not found", 404)
+    rec = _get(f"shares/{token}.json")
+    if rec is None or (rec.get("revoked") and not allow_revoked):
+        raise StorageError("This link is not valid (it may have been switched off).", 404)
+    return rec
+
+
+def share_list(pid):
+    check_id(pid)
+    out = []
+    for key in store.list("shares/"):
+        rec = _get(key)
+        if rec and rec.get("projectId") == pid:
+            out.append(rec)
+    out.sort(key=lambda r: r.get("created") or 0, reverse=True)
+    return out
+
+
+def share_revoke(pid, token):
+    rec = share_get(token, allow_revoked=True)
+    if rec.get("projectId") != check_id(pid):
+        raise StorageError("Link not found", 404)
+    rec["revoked"] = True
+    _put(f"shares/{token}.json", rec)
+    return rec
+
+
+def share_count_ai_turn(rec):
+    """Count one AI turn against the link's daily limit (raises when over)."""
+    day = _today()
+    usage = {k: v for k, v in (rec.get("usage") or {}).items() if k >= time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 86400))}
+    if usage.get(day, 0) >= rec.get("dailyLimit", 0):
+        raise StorageError("This link has used today's AI turns. Choose quick bots, or try again tomorrow.", 429)
+    usage[day] = usage.get(day, 0) + 1
+    rec["usage"] = usage
+    _put(f"shares/{rec['token']}.json", rec)
+
+
+def share_count_play(rec):
+    rec["plays"] = int(rec.get("plays") or 0) + 1
+    _put(f"shares/{rec['token']}.json", rec)

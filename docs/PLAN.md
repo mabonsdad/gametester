@@ -100,6 +100,19 @@ unchanged.
    * Sidebar: turn and phase controls, *Play AI turn*, auto-play, undo, end
      game; tabs for Card inspector, Log (with designer notes), Insights, and
      Rules reference.
+5. **Player view** (`play.html#p=<project>` or `play.html#s=<share token>`)
+   * Welcome: rulebook, name, number of opponents, player options, AI choice.
+   * Play: one human (bottom) against AI opponents shown as avatars with card
+     fans, counters and speech bubbles; AI turns follow on automatically with
+     a short pause; tricks and hands pause until the player clicks Next.
+   * Rules pop-up, a feed of what happened, and a results screen (with
+     confetti for a win).
+   * It drives the same engine and saves a normal session (`v_` ids) with
+     telemetry: move times, blocked and illegal clicks, AI turn times and
+     errors, rules opened, restarts.
+   * Share links (`shares/<token>.json`) give anonymous access to one
+     project's player view through `/api/play/<token>/...`, with a per-link
+     daily AI-turn cap; they can be revoked.
 
 ## 5. AI seats
 
@@ -181,6 +194,9 @@ insights (score chart, lead changes, AI feelings, notes).
   * Optional pauses after each trick and each hand or round; a game-over screen
     with standings and "Play again".
   * Stacking draw cards (off / same size / any).
+  * Player view and share links for testing with real players.
+  * Player options (`project.variants`): named choices that set project
+    fields, picked on the player view's welcome screen.
   * Announcements: a general "say something around a play" mechanic.
     * Rule fields: label, a formula for when it is required, checked before
       or after the play, and what happens if it is forgotten (others can

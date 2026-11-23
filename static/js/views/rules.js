@@ -3,7 +3,10 @@
 import { buildSystemPrompt } from '../ai.js';
 import { FORMULA_HELP, describeAutomation } from '../engine.js';
 import { check } from '../expr.js';
-import { END_AT, ENFORCE, LAYOUTS, MISSED, SCORE_EVENTS, SCORE_WHO, SETUP_OPS, STACKING, STYLES, blankAnnouncement, slug } from '../model.js';
+import {
+  END_AT, ENFORCE, LAYOUTS, MISSED, SCORE_EVENTS, SCORE_WHO, SETUP_OPS, STACKING, STYLES, blankAnnouncement, blankVariant, formatSetLines,
+  getPath, parseSetLines, slug,
+} from '../model.js';
 import { field, h, modal } from '../ui.js';
 
 export async function renderRules(root, ctx) {
@@ -61,6 +64,8 @@ export async function renderRules(root, ctx) {
       section('Setup', 'Run in order when a new game starts. Cards first go to their "Starts in" zone (set per card).', setupList()),
 
       section('Turn structure', null, turnEditor()),
+
+      section('Player options', 'Choices offered to players before a game in the player view (and share links) - e.g. game length or a house rule. Each choice changes project settings, written as "path = value" lines.', variantsEditor()),
 
       section('Automation: legal moves & scoring', 'Optional. Let the test bench check which moves are allowed, keep the score and end the game, so testers and AI players can concentrate on playing.', automationEditor()),
 
@@ -299,6 +304,40 @@ export async function renderRules(root, ctx) {
         h('div', { class: 'auto-summary' }, h('span', { class: 'field-label' }, 'How the test bench will run this game (AI players read this too)'), summary));
     }
     function redraw() { wrap.replaceChildren(build()); refreshSummary(); }
+    redraw();
+    return wrap;
+  }
+
+  function variantsEditor() {
+    const wrap = h('div', {});
+    const redraw = () => wrap.replaceChildren(build());
+    const build = () => h('div', { class: 'stack' },
+      project.variants.length ? null : h('p', { class: 'muted small' }, 'No player options yet. Example: an option "Game length" with choices "Quick" (automation.endWhen.0.expr = score >= 100) and "Long" (automation.endWhen.0.expr = score >= 250).'),
+      project.variants.map((v, vi) => h('fieldset', { class: 'image-set' },
+        h('legend', {}, v.label || 'Option'),
+        h('div', { class: 'grid-3' },
+          field('Option name', h('input', { type: 'text', value: v.label, oninput: (e) => { v.label = e.target.value; ctx.changed(); } })),
+          field('Explanation for players', h('input', { type: 'text', value: v.description || '', oninput: (e) => { v.description = e.target.value; ctx.changed(); } })),
+          field('Default choice', h('select', { value: String(v.default || 0), onchange: (e) => { v.default = parseInt(e.target.value, 10); ctx.changed(); } },
+            v.choices.map((c, ci) => h('option', { value: String(ci) }, c.label || `Choice ${ci + 1}`))))),
+        h('table', { class: 'edit-table' },
+          h('thead', {}, h('tr', {}, ['Choice', 'Settings it changes (path = value, one per line)', ''].map((t) => h('th', {}, t)))),
+          h('tbody', {}, v.choices.map((c, ci) => {
+            const check = h('small', { class: 'muted' });
+            const showCheck = () => {
+              const bad = Object.keys(c.set || {}).filter((k) => getPath(project, k) === undefined);
+              check.textContent = bad.length ? `Not found in this project (will be created): ${bad.join(', ')}` : '';
+            };
+            showCheck();
+            return h('tr', {},
+              h('td', {}, h('input', { type: 'text', value: c.label, size: 18, oninput: (e) => { c.label = e.target.value; ctx.changed(); } })),
+              h('td', {}, h('textarea', { rows: Math.max(2, Object.keys(c.set || {}).length), class: 'mono', value: formatSetLines(c.set), placeholder: 'automation.endWhen.0.expr = score >= 100', oninput: (e) => { c.set = parseSetLines(e.target.value); showCheck(); ctx.changed(); } }), check),
+              h('td', {}, h('button', { class: 'icon-btn danger', title: 'Remove choice', disabled: v.choices.length < 2, onclick: () => { v.choices.splice(ci, 1); v.default = Math.min(v.default || 0, v.choices.length - 1); ctx.changed(); redraw(); } }, '✕')));
+          }))),
+        h('div', { class: 'row gap' },
+          h('button', { class: 'btn small', onclick: () => { v.choices.push({ label: `Choice ${v.choices.length + 1}`, set: {} }); ctx.changed(); redraw(); } }, '+ Add choice'),
+          h('button', { class: 'btn small danger', onclick: () => { project.variants.splice(vi, 1); ctx.changed(); redraw(); } }, 'Remove option')))),
+      h('button', { class: 'btn small', onclick: () => { project.variants.push(blankVariant()); ctx.changed(); redraw(); } }, '+ Add player option'));
     redraw();
     return wrap;
   }

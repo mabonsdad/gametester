@@ -3,6 +3,12 @@
 
 let mode = null;
 let info = null;
+// Share-link mode (player view opened from a link): calls go to the link's
+// own restricted routes under api/play/<token>/ and need no login.
+let share = null;
+export const useShare = (token) => { share = token; };
+export const shareToken = () => share;
+const enc = encodeURIComponent;
 
 export async function init() {
   try {
@@ -31,7 +37,7 @@ async function call(method, url, body) {
   });
   let data = null;
   try { data = await r.json(); } catch { /* empty */ }
-  if (r.status === 401 && !url.endsWith('api/login')) {
+  if (r.status === 401 && !url.endsWith('api/login') && !share) {
     if (info) info.authed = false;
     window.dispatchEvent(new Event('gt-login-required'));
   }
@@ -72,6 +78,11 @@ export async function listProjects() {
   return (LS.get('cgtb.projects', [])).map((id) => LS.get(pKey(id))).filter(Boolean).map((p) => ({
     id: p.id, name: p.name, description: p.description, updated: p.updated, cardCount: p.cards?.length || 0, players: p.players,
   })).sort((a, b) => (b.updated || 0) - (a.updated || 0));
+}
+
+// Share mode: returns { project, share: { label, providers } }.
+export async function getSharedGame() {
+  return call('GET', `api/play/${enc(share)}`);
 }
 
 export async function getProject(id) {
@@ -122,6 +133,7 @@ export async function getSession(pid, sid) {
 }
 
 export async function saveSession(pid, session) {
+  if (share) return call('PUT', `api/play/${enc(share)}/sessions/${enc(session.id)}`, session);
   if (mode === 'server') return call('PUT', `api/projects/${encodeURIComponent(pid)}/sessions/${encodeURIComponent(session.id)}`, session);
   session.updated = Date.now();
   LS.set(sKey(pid, session.id), session);
@@ -141,8 +153,13 @@ export async function deleteSession(pid, sid) {
 // with a job id; poll jobGet() until status is answered / error / cancelled.
 export async function jobCreate(provider, prompt, meta) {
   if (mode !== 'server') throw new Error('Hosted AI seats need the server (python3 server.py, or the AWS deployment).');
-  return call('POST', 'api/ai/jobs', { provider, prompt, meta });
+  return call('POST', share ? `api/play/${enc(share)}/ai/jobs` : 'api/ai/jobs', { provider, prompt, meta });
 }
 
-export const jobGet = (id) => call('GET', `api/ai/jobs/${encodeURIComponent(id)}`);
-export const jobCancel = (id) => call('DELETE', `api/ai/jobs/${encodeURIComponent(id)}`);
+export const jobGet = (id) => call('GET', share ? `api/play/${enc(share)}/ai/jobs/${enc(id)}` : `api/ai/jobs/${enc(id)}`);
+export const jobCancel = (id) => call('DELETE', share ? `api/play/${enc(share)}/ai/jobs/${enc(id)}` : `api/ai/jobs/${enc(id)}`);
+
+// ----------------------------------------------------------- share links (tester)
+export const listShares = (pid) => call('GET', `api/projects/${enc(pid)}/shares`);
+export const createShare = (pid, body) => call('POST', `api/projects/${enc(pid)}/shares`, body);
+export const revokeShare = (pid, token) => call('DELETE', `api/projects/${enc(pid)}/shares/${enc(token)}`);

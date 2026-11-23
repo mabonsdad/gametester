@@ -60,6 +60,7 @@ function renderHeader(tab) {
       h('span', { class: 'proj-name', title: project.name }, project.name),
       [['cards', 'Cards'], ['rules', 'Rules & setup'], ['play', 'Playtest']].map(([id, label]) =>
         h('a', { href: `#/p/${project.id}/${id}`, class: tab === id ? 'active' : '' }, label)),
+      h('a', { href: `play.html#p=${project.id}`, target: '_blank', rel: 'noopener', class: 'player-link', title: 'Play this game as a player would (opens a new tab). Games are saved as sessions.' }, 'Player view ↗'),
     ) : h('nav', { class: 'tabs' }),
     h('div', { class: 'header-right' },
       project ? h('span', { id: 'save-state', class: `save-state ${saveState}` }, 'Saved') : null,

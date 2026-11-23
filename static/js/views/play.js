@@ -1,7 +1,8 @@
 // Playtest table: top-down view of the shared zones with 1-6 seats around
 // the edge, turn controls, AI seats, log and insights.
 import * as api from '../api.js';
-import { CONTROLLERS, checkAction as aiCheck, isAI, parseResponse, requestTurn } from '../ai.js';
+import { CONTROLLERS, isAI } from '../ai.js';
+import { rollAiCatch, takeAiTurn } from '../turns.js';
 import {
   activePlayer, apply, automation, cardDef, checkAction as ruleCheck, clone, competitorName, competitors, createGame,
   announcementRules, announcementsDue, cardEffects, describeAutomation, isAutomated, isShedding, isTricks, leadStats, legalMoves,
@@ -117,11 +118,12 @@ export async function renderPlay(root, ctx, args) {
               await startGame(seats.slice(0, count), options, seed);
             },
           }, 'Start game')),
-        h('section', { class: 'panel' },
+        h('div', { class: 'stack' }, sharePanel(), h('section', { class: 'panel' },
           h('h2', {}, 'Saved sessions'),
           sessions.length ? h('ul', { class: 'session-list' }, sessions.map((s) => h('li', {},
             h('div', {},
               h('strong', {}, s.name),
+              s.source ? h('span', { class: `badge ${s.source.kind === 'share' ? 'warn' : 'ok'} src-badge` }, s.source.kind === 'share' ? `Share link: ${s.source.via}` : 'Player view') : null,
               h('div', { class: 'muted small' }, `${(s.players || []).join(', ')} · turn ${s.turn ?? '?'} · ${s.status === 'ended' ? 'finished' : 'in progress'} · ${fmtTime(s.updated)}`)),
             h('div', { class: 'row gap' },
               h('a', { class: 'btn small primary', href: `#/p/${project.id}/play/${s.id}` }, 'Resume'),
@@ -129,7 +131,60 @@ export async function renderPlay(root, ctx, args) {
                 class: 'btn small danger', onclick: async () => {
                   if (await confirmDialog('Delete session', `Delete "${s.name}"?`, 'Delete')) { await api.deleteSession(project.id, s.id); drawSetup(); }
                 },
-              }, 'Delete'))))) : h('p', { class: 'muted' }, 'No saved sessions yet. Every game is saved automatically as you play.')))));
+              }, 'Delete'))))) : h('p', { class: 'muted' }, 'No saved sessions yet. Every game is saved automatically as you play.'))))));
+  }
+
+  // Share links: let other people play this game in the player view, no login.
+  function sharePanel() {
+    const box = h('section', { class: 'panel' });
+    if (api.getMode() !== 'server') {
+      box.append(h('h2', {}, 'Share as a game'), h('p', { class: 'muted' }, 'Share links need the server (they work on the live site).'));
+      return box;
+    }
+    const ai = api.serverInfo()?.ai || {};
+    const avail = { random: true, anthropic: ai.anthropic?.keySet && ai.anthropic?.sdkInstalled, openai: ai.openai?.keySet && ai.openai?.model };
+    const label = h('input', { type: 'text', placeholder: 'Who is it for? e.g. Friday playtest group' });
+    const prov = { random: true, anthropic: !!avail.anthropic, openai: false };
+    const limit = h('input', { type: 'number', min: 0, max: 5000, value: 300, class: 'narrow' });
+    const list = h('div', {});
+    const linkFor = (t) => new URL(`play.html#s=${t}`, location.href).href;
+    const refresh = async () => {
+      let shares = [];
+      try { shares = await api.listShares(project.id); } catch (e) { list.replaceChildren(h('p', { class: 'warn-box small' }, e.message)); return; }
+      list.replaceChildren(shares.length ? h('ul', { class: 'session-list' }, shares.map((s) => h('li', { class: s.revoked ? 'revoked' : '' },
+        h('div', {},
+          h('strong', {}, s.label), s.revoked ? h('span', { class: 'badge' }, 'switched off') : null,
+          h('div', { class: 'muted small' }, `${s.providers.join(', ')} · ${s.plays || 0} game(s) started · AI turns today ${(s.usage || {})[new Date().toISOString().slice(0, 10)] || 0}/${s.dailyLimit} · ${fmtTime(s.created)}`)),
+        s.revoked ? null : h('div', { class: 'row gap' },
+          h('button', { class: 'btn small primary', onclick: () => navigator.clipboard.writeText(linkFor(s.token)).then(() => toast('Link copied')) }, 'Copy link'),
+          h('a', { class: 'btn small', href: linkFor(s.token), target: '_blank', rel: 'noopener' }, 'Open'),
+          h('button', { class: 'btn small danger', onclick: async () => { if (await confirmDialog('Switch off link', `Switch off "${s.label}"? People with the link will no longer be able to play.`, 'Switch off')) { await api.revokeShare(project.id, s.token); refresh(); } } }, 'Switch off'))))) : h('p', { class: 'muted small' }, 'No links yet.'));
+    };
+    box.append(
+      h('h2', {}, 'Share as a game'),
+      h('p', { class: 'muted small' }, 'A share link opens this game in the player view - rules, options, you against AI opponents - with no password. Every game played through it is saved here as a session.'),
+      field('Label', label),
+      h('div', { class: 'stack' },
+        h('span', { class: 'field-label' }, 'Opponents players may choose'),
+        ['random', 'anthropic', 'openai'].map((id) => h('label', { class: 'inline' },
+          h('input', { type: 'checkbox', checked: prov[id], disabled: !avail[id], onchange: (e) => { prov[id] = e.target.checked; } }),
+          ` ${{ random: 'Quick bots (free)', anthropic: 'Claude (uses your API credit)', openai: 'ChatGPT (uses your API credit)' }[id]}${avail[id] ? '' : ' - not set up'}`))),
+      h('label', { class: 'inline small' }, 'Max AI turns per day ', limit),
+      h('button', {
+        class: 'btn', onclick: async () => {
+          const providers = Object.keys(prov).filter((k) => prov[k] && avail[k]);
+          try {
+            const s = await api.createShare(project.id, { label: label.value.trim() || 'Shared game', providers, dailyLimit: parseInt(limit.value, 10) || 0 });
+            await navigator.clipboard?.writeText(linkFor(s.token)).catch(() => {});
+            toast('Link created and copied');
+            label.value = '';
+            refresh();
+          } catch (e) { toast(e.message, 'error'); }
+        },
+      }, 'Create share link'),
+      list);
+    refresh();
+    return box;
   }
 
   async function startGame(players, options, seed) {
@@ -210,14 +265,10 @@ export async function renderPlay(root, ctx, args) {
   // missed announcement gets one roll against the rule's AI catch chance).
   function maybeAiCatch() {
     const C = st?.catchable;
-    if (!C || C.aiRolled || st.status !== 'playing') return;
-    C.aiRolled = true;
-    const ais = st.players.filter((p) => p.id !== C.pid && isAI(p.controller));
-    const rule = announcementRules(project).find((r) => r.id === C.id);
-    if (!ais.length || Math.random() * 100 >= Number(rule?.aiCatch ?? 70)) return;
-    const catcher = ais[Math.floor(Math.random() * ais.length)];
+    const catcher = rollAiCatch(project, st);
+    if (!catcher) return;
     setTimeout(() => {
-      if (!disposed && st.catchable && st.catchable.pid === C.pid && st.catchable.id === C.id) commit({ type: 'catch', actor: catcher.id });
+      if (!disposed && st.catchable && st.catchable.pid === C.pid && st.catchable.id === C.id) commit({ type: 'catch', actor: catcher });
     }, 400);
   }
 
@@ -271,87 +322,16 @@ export async function renderPlay(root, ctx, args) {
     if (st.pending) return toast('The game is paused - press Next first.', 'warn');
     const p = activePlayer(st);
     if (!isAI(p.controller)) return toast(`${p.name} is a human seat.`, 'warn');
-    const turnAtStart = st.turn.number;
-    const tricks = isTricks(project);
-    const shedding = isShedding(project);
-    const automated = tricks || shedding;
-    const maxAsks = shedding ? 3 : tricks ? 2 : 1;
-    const strict = automation(project).enforce === 'strict';
-    const act = (a) => apply(project, st, { ...a, actor: a.actor || p.id });
-    const myTurn = () => st.status === 'playing' && activePlayer(st).id === p.id && st.turn.number === turnAtStart;
     aiBusy = { message: `${p.name} is thinking…`, cancel: null };
     drawSide();
     try {
-      let feedback = '';
-      let parsed = null;
-      let endRequested = false;
-      let snapshotTaken = false;
-      // Automated games ask again (with the reason) if the move was not legal,
-      // and shedding games ask again after a draw (play the drawn card or pass).
-      for (let attempt = 0; attempt < maxAsks; attempt++) {
-        const res = await requestTurn(project, st, {
-          manual: manualPrompt,
-          waiting: (message, cancel) => { aiBusy = { message, cancel }; drawSide(); },
-        }, feedback);
-        if (disposed) return;
-        if (!myTurn()) throw new Error('The table changed while the AI was thinking; its answer was discarded.');
-        parsed = res.parsed || parseResponse(res.text);
-        if (!snapshotTaken) { history.push(clone(st)); snapshotTaken = true; }
-        if (parsed.reasoning) act({ type: 'note', text: parsed.reasoning, private: true, kind: 'reasoning' });
-        const rejected = [];
-        for (const raw of parsed.actions) {
-          if (!myTurn()) break;
-          if (!raw || typeof raw !== 'object') continue;
-          const a = { ...raw, actor: p.id };
-          if (a.type === 'endTurn' && !automated) { endRequested = true; break; } // applied after the assessment
-          const blocked = aiCheck(project, st, p.id, a);
-          const broken = ruleCheck(project, st, a);
-          if (blocked || (broken && strict)) {
-            rejected.push(blocked || broken);
-            act({ type: 'note', actor: 'system', text: `${p.name}'s action rejected: ${blocked || broken}` });
-            continue;
-          }
-          try {
-            act(a);
-            if (broken) act({ type: 'note', actor: 'system', text: `Rule warning (${p.name}): ${broken}` });
-          } catch (e) {
-            act({ type: 'note', actor: 'system', text: `${p.name}'s action ${JSON.stringify(raw)} failed: ${e.message}` });
-          }
-          if (a.type === 'endGame') break;
-        }
-        if (automated && myTurn() && attempt < maxAsks - 1) {
-          const drew = shedding && st.hand.drew && !rejected.length;
-          feedback = rejected.length ? rejected.join(' ')
-            : drew ? `You drew ${cardDef(project, st, st.hand.drawn)?.name} (${st.hand.drawn}). Play it now, or pass with {"type":"endTurn"}.`
-              : 'You did not make a legal move.';
-          aiBusy = { message: drew ? `${p.name} drew a card - asking whether to play it…` : `${p.name}'s move was not legal - asking again…`, cancel: null };
-          drawSide();
-          continue;
-        }
-        break;
-      }
-      act({ type: 'assess', winConfidence: numOrNull(parsed.winConfidence), experience: parsed.experience || '' });
-      if (parsed.designerNotes) act({ type: 'note', text: `Designer feedback: ${parsed.designerNotes}`, kind: 'feedback' });
-      if (shedding) {
-        if (myTurn() && legalMoves(project, st, p.id).canDraw) {
-          act({ type: 'note', actor: 'system', text: `${p.name} did not make a legal move; the harness draws a card for them.` });
-          act({ type: 'draw' });
-        }
-        if (myTurn() && legalMoves(project, st, p.id).canPass) {
-          act({ type: 'note', actor: 'system', text: `${p.name} passes (harness).` });
-          act({ type: 'endTurn' });
-        }
-      } else if (tricks) {
-        if (myTurn()) {
-          const lm = legalMoves(project, st, p.id);
-          const card = lm.legal[Math.floor(Math.random() * lm.legal.length)];
-          act({ type: 'note', actor: 'system', text: `${p.name} did not make a legal play; the harness played ${cardDef(project, st, card)?.name} for them.` });
-          act({ type: 'move', card, to: lm.target });
-        }
-      } else if (st.status === 'playing' && activePlayer(st).id === p.id) {
-        if (!endRequested) act({ type: 'note', actor: 'system', text: `${p.name} did not end their turn; ending it.` });
-        act({ type: 'endTurn' });
-      }
+      const res = await takeAiTurn(project, st, {
+        ui: { manual: manualPrompt, waiting: (message, cancel) => { aiBusy = { message, cancel }; drawSide(); } },
+        onStatus: (message) => { aiBusy = { message, cancel: null }; drawSide(); },
+        beforeChange: () => history.push(clone(st)),
+        isDisposed: () => disposed,
+      });
+      if (res.disposed) return;
       persist();
     } catch (e) {
       if (e.message !== 'Cancelled') toast(e.message, 'error', 7000);
@@ -910,11 +890,6 @@ export async function renderPlay(root, ctx, args) {
   };
 }
 
-function numOrNull(v) {
-  if (v == null || v === '') return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : null;
-}
 
 function hashString(s) {
   let x = 2166136261;
