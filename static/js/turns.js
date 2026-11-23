@@ -49,6 +49,11 @@ export async function takeAiTurn(project, st, { ui = {}, onStatus = () => {}, be
       if (!raw || typeof raw !== 'object') continue;
       const a = { ...raw, actor: p.id };
       if (a.type === 'endTurn' && !automated) { endRequested = true; break; } // applied after the assessment
+      if (automated && a.type === 'counter' && automation(project).autoScore) {
+        // The harness keeps the score in automated games: ignore, don't reject.
+        act({ type: 'note', actor: 'system', text: `${p.name}'s score change ignored - scoring is automatic.` });
+        continue;
+      }
       const blocked = aiCheck(project, st, p.id, a);
       const broken = ruleCheck(project, st, a);
       if (blocked || (broken && strict)) {

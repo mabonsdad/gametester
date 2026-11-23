@@ -16,6 +16,7 @@ import {
 import { SUITS, applyVariants, normalizeProject, uid, zoneDef } from './model.js';
 import { finishTurn, rollAiCatch, takeAiTurn } from './turns.js';
 import { cardBack, cardFace, h, modal, toast } from './ui.js';
+import { showReloadBar, watchVersion } from './version.js';
 
 const app = document.getElementById('app');
 const HUMAN = 'p1';
@@ -760,3 +761,4 @@ document.addEventListener('keydown', (e) => {
 });
 
 boot();
+watchVersion(() => showReloadBar('A new version of this game has been published - reload to use it.'));

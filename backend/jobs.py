@@ -24,7 +24,10 @@ def run(jid):
     storage.job_update(jid, status="running")
     prompt = job.get("prompt") or {}
     try:
-        res = ai.complete(job["provider"], prompt.get("system", ""), prompt.get("user", ""), job.get("options"))
+        options = dict(job.get("options") or {})
+        if prompt.get("format") == "turn":
+            options["format"] = "turn"
+        res = ai.complete(job["provider"], prompt.get("system", ""), prompt.get("user", ""), options)
         fields = dict(status="answered", response=res["text"], model=res.get("model"))
     except ai.AIError as e:
         fields = dict(status="error", error=str(e))

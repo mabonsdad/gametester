@@ -22,6 +22,37 @@ DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5"
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5-2", "claude-sonnet-5-5"}
 
 
+# The reply format for a game turn (see static/js/ai.js). Every action field
+# is optional apart from "type", so one schema covers every game style.
+_STR = {"type": "string"}
+TURN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reasoning": _STR,
+        "actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": _STR, "card": _STR, "to": _STR, "with": _STR, "from": _STR, "zone": _STR,
+                    "count": {"type": "integer"}, "faceUp": {"type": "boolean"}, "position": _STR,
+                    "player": _STR, "counter": _STR, "delta": {"type": "number"}, "value": {"type": "number"},
+                    "choose": _STR, "id": _STR, "announce": {"type": "array", "items": _STR},
+                    "winner": {"type": "array", "items": _STR}, "reason": _STR, "text": _STR,
+                },
+                "required": ["type"],
+                "additionalProperties": False,
+            },
+        },
+        "winConfidence": {"type": "integer"},
+        "experience": _STR,
+        "designerNotes": _STR,
+    },
+    "required": ["reasoning", "actions", "winConfidence", "experience", "designerNotes"],
+    "additionalProperties": False,
+}
+
+
 class AIError(Exception):
     def __init__(self, message, status=502):
         super().__init__(message)
@@ -66,21 +97,33 @@ def _anthropic(system, user, options):
     model = options.get("model") or os.environ.get("CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL)
     effort = options.get("effort") or os.environ.get("CLAUDE_EFFORT", "medium")
     client = anthropic.Anthropic()
+    output_config = {"effort": effort}
+    if options.get("format") == "turn":
+        # Game turns must come back as one JSON object in the turn format.
+        output_config["format"] = {"type": "json_schema", "schema": TURN_SCHEMA}
     kwargs = dict(
         model=model,
         max_tokens=16000,
         system=system,
         messages=[{"role": "user", "content": user}],
-        output_config={"effort": effort},
+        output_config=output_config,
     )
-    try:
+
+    def send(kw):
         if model in FALLBACK_MODELS:
             # If a safety classifier declines, let the API retry on a suitable model.
-            resp = client.beta.messages.create(
-                betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs
-            )
-        else:
-            resp = client.messages.create(**kwargs)
+            return client.beta.messages.create(betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kw)
+        return client.messages.create(**kw)
+
+    try:
+        try:
+            resp = send(kwargs)
+        except anthropic.BadRequestError:
+            if "format" not in output_config:
+                raise
+            # The schema was not accepted: ask again without it (the browser
+            # still extracts the JSON from the reply).
+            resp = send(dict(kwargs, output_config={"effort": effort}))
     except anthropic.AuthenticationError:
         raise AIError("Claude API rejected the credentials. Set ANTHROPIC_API_KEY on the server.", 401)
     except anthropic.RateLimitError:

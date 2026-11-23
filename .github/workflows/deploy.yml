@@ -72,6 +72,8 @@ jobs:
       - name: Deploy front end (S3)
         # --delete only removes files under the app's own prefix.
         run: |
+          # Open pages poll version.json and offer a reload when it changes.
+          echo "{\"version\": \"$GITHUB_SHA\"}" > static/version.json
           aws s3 sync static/ "s3://$SITE_BUCKET/$SITE_PREFIX/" --delete \
             --exclude ".DS_Store" --cache-control "no-cache,max-age=0,must-revalidate"
       - name: Invalidate CloudFront
