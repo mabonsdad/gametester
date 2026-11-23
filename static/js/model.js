@@ -30,6 +30,12 @@ export const STYLES = {
   free: 'Free-form: any card can go anywhere; players apply the rules',
   tricks: 'Trick-taking: play one card to a trick; highest wins (Whist, Hearts, Spades…)',
   shedding: 'Shedding: match the colour or value of the top card; first to empty their hand wins',
+  sets: 'Set collection: lay sets ("tricks") in front of you; a few actions per turn; best combination scores',
+};
+export const SETS_END = {
+  round: 'When the draw pile runs out, finish the round (equal turns), then end',
+  now: 'When the draw pile runs out, end after that turn',
+  off: 'Only by the end conditions below',
 };
 export const ENFORCE = {
   off: 'Off - no checks',
@@ -75,6 +81,24 @@ export function defaultAutomation() {
       wildColour: 'Wild',
       playDrawn: true,
       stackDraws: 'off',
+    },
+    sets: {
+      drawZone: 'deck',
+      marketZone: 'market', // face-up cards that can be swapped ('' = none)
+      discardZone: 'discard',
+      actions: 2, // actions per turn
+      handLimit: 6, // discard down to this at the end of a turn (0 = no limit)
+      valueStat: 'value',
+      zones: [ // per-player zones that score: { zone, multiplier, secret (scored only at the end) }
+        { zone: 'day', multiplier: 2, secret: false },
+        { zone: 'night', multiplier: 1, secret: true },
+      ],
+      giveZone: 'day', // other players' zone you can complete a trick in ('' = not allowed)
+      captureZone: 'night', // where a trick you complete there goes
+      giveNeedsTrick: true,
+      counter: 'score',
+      combos: [], // { id, label, pattern: 'werewolf + villager', points: '' (sum of values) | formula using sum, count }
+      endWhenEmpty: 'round', // round | now | off
     },
     announcements: [], // { id, label, check, when, ifMissed, penaltyDraw, penaltyCounter, penaltyAmount, aiCatch, remind }
     scoring: [], // { event, who, counter, expr, when, label }
@@ -144,6 +168,7 @@ export function blankCard(project) {
     color: '#f4efe3',
     image: null,
     imageMode: 'art',
+    icon: '', // an emoji shown as the card's picture when it has no image
     stats: {},
     tags: [],
   };
@@ -163,6 +188,7 @@ export function normalizeProject(p) {
     ...base.automation, ...A,
     tricks: { ...base.automation.tricks, ...(A.tricks || {}) },
     shedding: { ...base.automation.shedding, ...(A.shedding || {}) },
+    sets: { ...base.automation.sets, ...(A.sets || {}) },
     scoring: Array.isArray(A.scoring) ? A.scoring : [],
     endWhen: Array.isArray(A.endWhen) ? A.endWhen : [],
     announcements: Array.isArray(A.announcements) ? A.announcements : [],
@@ -434,6 +460,115 @@ export function switchbackProject() {
   ];
   p.cards.push(card('k_prism', 'Prism', 'Wild: play on anything, choose the colour', 'Wild', '#2b2b33', 'wild', 'wild', 50, 4));
   p.cards.push(card('k_prism4', 'Prism +4', 'Wild: choose the colour; next player draws 4 and misses a turn', 'Wild', '#2b2b33', 'wild+4', 'wild draw:4', 50, 2));
+  return p;
+}
+
+
+// ------------------------------------------------------------------ werewolf_tricks
+// Set collection with a werewolf theme: lay tricks face up (Day, double
+// points, but others can finish them and take them) or face down (Night,
+// safe and secret).
+export function werewolfProject() {
+  const p = blankProject('werewolf_tricks');
+  p.description = 'Collect village and werewolf cards and lay them as tricks: face up by Day for double points (but others can finish and steal them), or face down by Night, safe and secret. Two actions a turn; most points when the Night pile runs out wins.';
+  p.players = { min: 3, max: 4, default: 4 };
+  p.cardBack = { color: '#1f2540', image: null, label: 'NIGHT' };
+  p.zones = [
+    { id: 'nightpile', name: 'Night pile', scope: 'shared', layout: 'stack', faceUp: false, visibility: 'public' },
+    { id: 'dayrow', name: 'Day cards', scope: 'shared', layout: 'spread', faceUp: true, visibility: 'public' },
+    { id: 'discard', name: 'Discard pile', scope: 'shared', layout: 'stack', faceUp: true, visibility: 'public' },
+    { id: 'hand', name: 'Hand', scope: 'player', layout: 'hand', faceUp: true, visibility: 'owner', builtin: true },
+    { id: 'day', name: 'Day tricks', scope: 'player', layout: 'spread', faceUp: true, visibility: 'public' },
+    { id: 'night', name: 'Night tricks', scope: 'player', layout: 'spread', faceUp: false, visibility: 'owner' },
+  ];
+  p.counters = [{ id: 'score', name: 'Points', start: 0 }];
+  p.setup = [
+    { op: 'shuffle', zone: 'nightpile' },
+    { op: 'deal', from: 'nightpile', to: 'hand', count: 3 },
+    { op: 'move', from: 'nightpile', to: 'dayrow', count: 4, faceUp: true },
+  ];
+  p.turn = { phases: [], drawAtStart: { count: 0, from: 'nightpile' }, firstPlayer: 'seat1', direction: 'clockwise' };
+  p.automation = {
+    ...defaultAutomation(),
+    style: 'sets',
+    enforce: 'strict',
+    autoScore: true,
+    sets: {
+      ...defaultAutomation().sets,
+      drawZone: 'nightpile',
+      marketZone: 'dayrow',
+      discardZone: 'discard',
+      actions: 2,
+      handLimit: 6,
+      zones: [{ zone: 'day', multiplier: 2, secret: false }, { zone: 'night', multiplier: 1, secret: true }],
+      giveZone: 'day',
+      captureZone: 'night',
+      combos: [
+        { id: 'mob', label: 'Mob', pattern: '5 villagers', points: '' },
+        { id: 'vision', label: 'Vision', pattern: 'seer + 3 any distinct', points: '' },
+        { id: 'hunt', label: 'Hunt', pattern: 'werewolf + villager', points: '' },
+        { id: 'potion', label: 'Potion', pattern: 'witch + villager + werewolf', points: '' },
+        { id: 'lovers', label: 'Lovers', pattern: 'cupid + 2 any', points: '' },
+        { id: 'pack', label: 'Pack', pattern: 'alpha wolf + 2 werewolves', points: '' },
+        { id: 'guard', label: 'Guard', pattern: 'defender + villager/seer/witch', points: 'sum * 2' },
+        { id: 'feast', label: 'Feast', pattern: 'vampire + 3 villagers', points: '' },
+      ],
+      endWhenEmpty: 'round',
+    },
+  };
+  p.rules = {
+    overview: 'A village by Day, a hunt by Night. Collect cards and lay them in front of you as tricks: sets that match the rule printed on a card.\nDay tricks are laid face up and score double, but while a Day trick is unfinished another player can complete it with a card of their own and take it.\nNight tricks are laid face down: they are safe, score single points and stay secret until the end.',
+    objective: 'Have the most points when the Night pile runs out.',
+    turnRules:
+      'Setup: everyone gets 3 cards. Four cards are turned face up as the Day cards; the rest form the Night pile.\n' +
+      'On your turn take two actions (the same one twice is fine):\n' +
+      '1. Draw a card from the Night pile.\n' +
+      '2. Swap a card from your hand for one of the Day cards (yours takes its place).\n' +
+      '3. Play a card face up to your Day tricks.\n' +
+      '4. Play a card face down to your Night tricks.\n' +
+      "5. Put a card into another player's Day tricks if it completes a trick with their loose cards - you take that whole trick, face down, to your Night tricks.\n" +
+      'At the end of your turn you may hold at most 6 cards: discard any extra.\n' +
+      'Cards that are already part of a finished trick are safe; only loose cards can be used against you.',
+    endGame: 'When the Night pile runs out, play continues until everyone has had the same number of turns. Then the Night tricks are revealed, and the highest total wins.',
+    scoring:
+      "Only cards in a trick score. A trick is worth the sum of its cards' values - doubled in your Day tricks, single in your Night tricks. Each card counts in one trick only; the app always finds the best arrangement of the cards in each zone.\n" +
+      'Mob: 5 Villagers (5).\n' +
+      'Vision: a Seer + 3 different cards, e.g. Seer, Witch, Villager, Werewolf (9) or Seer, Seer, Werewolf, Cupid (7).\n' +
+      'Hunt: a Werewolf + 1 Villager (4).\n' +
+      'Potion: a Witch + a Villager + a Werewolf (7).\n' +
+      'Lovers: Cupid + any 2 cards (the two cards\' values).\n' +
+      'Pack: the Alpha Wolf + 2 Werewolves (10).\n' +
+      'Guard: a Defender + a Villager, Seer or Witch; the Defender is worth the same as that card (2, 4 or 6).\n' +
+      'Feast: a Vampire + 3 Villagers (8).',
+    aiHints: 'A trick you finish in your Day tricks within one turn is never at risk and scores double - for example play a Werewolf and a Villager together. Loose cards left in your Day tricks can be stolen. Build big tricks (Mob, Feast) face down in the Night. Watch other players\' loose Day cards for tricks you can complete and take. Swap for Day cards that complete a trick.',
+  };
+  const card = (id, name, icon, value, count, color, description, rules) => ({
+    ...blankCard(p), id, name, icon, count, color, description, rules, startZone: 'nightpile', stats: { value }, tags: ['werewolf-tricks'],
+  });
+  p.cards = [
+    card('villager', 'Villager', '🧑‍🌾', 1, 48, '#efe4c8', 'Value 1', 'Mob: 5 Villagers.'),
+    card('seer', 'Seer', '🔮', 2, 3, '#c9b8ee', 'Value 2', 'Vision: a Seer + 3 different cards.'),
+    card('werewolf', 'Werewolf', '🐺', 3, 16, '#b08a6e', 'Value 3', 'Hunt: a Werewolf + 1 lone Villager.'),
+    card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potion: Witch + Villager (saved) + Werewolf (killed).'),
+    card('cupid', 'Cupid', '💘', 0, 3, '#f6c2d6', 'Value 0', 'Lovers: Cupid + any 2 cards.'),
+    card('alpha-wolf', 'Alpha Wolf', '🌕', 4, 1, '#8c7a9e', 'Value 4', 'Pack: Alpha Wolf + 2 Werewolves.'),
+    card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Worth the card it guards', 'Guard: a Defender + a Villager, Seer or Witch.'),
+    card('vampire', 'Vampire', '🧛', 5, 4, '#d27a86', 'Value 5', 'Feast: a Vampire + 3 Villagers.'),
+  ];
+  p.variants = [
+    { id: 'actions', label: 'Actions per turn', description: 'How many actions each player takes on their turn.', default: 0, choices: [
+      { label: '2 actions (standard)', set: { 'automation.sets.actions': 2 } },
+      { label: '3 actions (faster game)', set: { 'automation.sets.actions': 3 } },
+    ] },
+    { id: 'daymult', label: 'Day tricks score', description: 'The reward for risking a face-up trick.', default: 0, choices: [
+      { label: 'Double', set: { 'automation.sets.zones.0.multiplier': 2 } },
+      { label: 'Triple', set: { 'automation.sets.zones.0.multiplier': 3 } },
+    ] },
+    { id: 'end', label: 'When the Night pile runs out', description: 'How the game ends.', default: 0, choices: [
+      { label: 'Finish the round (everyone gets equal turns)', set: { 'automation.sets.endWhenEmpty': 'round' } },
+      { label: 'Stop after that turn', set: { 'automation.sets.endWhenEmpty': 'now' } },
+    ] },
+  ];
   return p;
 }
 

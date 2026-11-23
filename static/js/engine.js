@@ -15,6 +15,7 @@
 
 import { END_AT, ENFORCE, SCORE_EVENTS, SCORE_WHO, zoneDef } from './model.js';
 import { run as runExpr } from './expr.js';
+import { assignCards, bestTrickWith, bestTricks, compileSets } from './sets.js';
 
 // ------------------------------------------------------------------ RNG
 function rand(st) {
@@ -66,8 +67,8 @@ export function isVisibleTo(project, st, uid, pid) {
   const c = st.cards[uid];
   const z = st.zones[c.zone];
   const def = zoneDef(project, z.defId) || {};
-  if (def.visibility === 'owner') return !!pid && z.owner === pid;
-  if (!c.faceUp) return false;
+  if (def.visibility === 'owner') return (!!pid && z.owner === pid) || (!!st.revealed?.includes(z.defId) && def.layout !== 'hand');
+  if (!c.faceUp) return st.revealed?.includes(z.defId) || false;
   if (def.layout === 'stack') return z.cards[z.cards.length - 1] === uid; // only the top of a pile
   return true;
 }
@@ -289,6 +290,10 @@ export function apply(project, st, action) {
   const a = action || {};
   const actor = a.actor || activePlayer(st).id;
   const who = player(st, actor)?.name || actor;
+  if (isSets(project) && st.hand && st.status === 'playing' && player(st, actor) && ['move', 'draw', 'swap', 'endTurn'].includes(a.type)) {
+    setsApply(project, st, a, actor);
+    return st;
+  }
   if (st.catchable && ['move', 'draw', 'endTurn'].includes(a.type) && player(st, actor)) {
     log(st, 'system', 'announce', `Nobody caught ${player(st, st.catchable.pid).name} in time.`);
     st.catchable = null;
@@ -339,6 +344,15 @@ export function apply(project, st, action) {
       const to = resolveZone(st, a.to || 'hand', actor);
       if (!to) throw new Error(`no zone "${a.to}"`);
       doDraw(project, st, actor, from, to, Math.max(1, parseInt(a.count ?? 1, 10) || 1));
+      break;
+    }
+    case 'swap': {
+      // Exchange two cards' places (zone and position).
+      const x = st.cards[a.card];
+      const y = st.cards[a.with];
+      if (!x || !y) throw new Error(`no card "${x ? a.with : a.card}"`);
+      swapCards(project, st, a.card, a.with);
+      log(st, actor, 'swap', `${who} swapped ${cardName(project, st, a.card)} and ${cardName(project, st, a.with)}`, { data: { card: a.card, with: a.with } });
       break;
     }
     case 'flip': {
@@ -445,6 +459,7 @@ export function apply(project, st, action) {
     default:
       throw new Error(`unknown action type "${a.type}"`);
   }
+  if (isSets(project) && st.hand && st.status === 'playing' && ['move', 'swap', 'flip'].includes(a.type)) setsRescore(project, st);
   return st;
 }
 
@@ -491,7 +506,8 @@ const NO_AUTOMATION = { style: 'free', enforce: 'off', autoScore: false, teams: 
 export const automation = (project) => project.automation || NO_AUTOMATION;
 export const isTricks = (project) => automation(project).style === 'tricks';
 export const isShedding = (project) => automation(project).style === 'shedding';
-export const isAutomated = (project) => isTricks(project) || isShedding(project);
+export const isSets = (project) => automation(project).style === 'sets';
+export const isAutomated = (project) => isTricks(project) || isShedding(project) || isSets(project);
 
 function statOf(project, st, uid, stat) {
   return cardDef(project, st, uid)?.stats?.[stat];
@@ -560,7 +576,7 @@ function startHand(project, st, first) {
   st.lastTrick = null;
   st.announce = null;
   st.catchable = null;
-  log(st, 'system', 'hand', `${isShedding(project) ? 'Round' : 'Hand'} ${st.hand.number}: ${st.players[st.dealer].name} deals.`);
+  if (!isSets(project)) log(st, 'system', 'hand', `${isShedding(project) ? 'Round' : 'Hand'} ${st.hand.number}: ${st.players[st.dealer].name} deals.`);
   for (const step of project.setup || []) {
     if (!first && step.op === 'counter') continue; // keep scores between hands
     try {
@@ -571,6 +587,10 @@ function startHand(project, st, first) {
   }
   if (isShedding(project)) {
     startShedRound(project, st);
+    return;
+  }
+  if (isSets(project)) {
+    startSets(project, st);
     return;
   }
   if (T.trump === 'fixed' && T.trumpSuit) {
@@ -740,6 +760,11 @@ export function formulaScope(project, st, pid, ctx = {}) {
     caught: (id) => st.annStats?.[pid]?.[id]?.caught || 0,
     catches: (id) => st.annStats?.[pid]?.[id]?.catches || 0,
     zoneCount: (zone, stat, value) => zoneCards(zone).filter((u) => matches(u, stat, value)).length,
+    setPoints: (zone) => {
+      const zid = resolveZone(st, zone, pid);
+      return zid && isSets(project) ? zoneTricks(project, st, zid).total : 0;
+    },
+    pileLeft: isSets(project) ? (st.zones[setsCfg(project).drawZone]?.cards.length ?? 0) : (st.zones[packZone(project, st)]?.cards.length ?? 0),
     zoneSum: (zone, stat) => zoneCards(zone).reduce((s, u) => s + (Number(statOf(project, st, u, stat)) || 0), 0),
     wonCount: (stat, value) => zoneCards(T.wonZone).filter((u) => matches(u, stat, value)).length,
     wonSum: (stat) => zoneCards(T.wonZone).reduce((s, u) => s + (Number(statOf(project, st, u, stat)) || 0), 0),
@@ -760,6 +785,8 @@ export const FORMULA_HELP = [
   ['wonCount("suit","Hearts")', 'cards in their tricks-won zone (optionally matching a stat)'],
   ['wonSum("points")', 'sum of a stat over their tricks-won zone'],
   ['zoneCount("haul"), zoneSum("haul","number")', 'the same for any zone'],
+  ['setPoints("day")', 'set-collection games: the best score of the tricks in one of their zones (before any multiplier)'],
+  ['pileLeft', 'cards left in the draw pile'],
   ['max, min, abs, floor, ceil, round', 'functions'],
   ['+ - * / %   < <= > >= == !=   && || !   a ? b : c', 'operators'],
 ];
@@ -1070,6 +1097,468 @@ function shedLegal(project, st, pid, out) {
   return out;
 }
 
+// ------------------------------------------------------------------ set collection
+// Players take a few actions per turn (draw, swap with a face-up market card,
+// play a card to one of their own scoring zones, or use a card to complete a
+// trick in another player's zone and take that trick). Each scoring zone is
+// worth the best split of its cards into combos (see sets.js) times the
+// zone's multiplier. Secret zones (face down) are only added to the score
+// when the game ends.
+
+const SETS_DEFAULTS = {
+  drawZone: 'deck', marketZone: 'market', discardZone: 'discard', actions: 2, handLimit: 6, valueStat: 'value',
+  zones: [{ zone: 'day', multiplier: 2, secret: false }, { zone: 'night', multiplier: 1, secret: true }],
+  giveZone: 'day', captureZone: 'night', giveNeedsTrick: true, counter: 'score', combos: [], endWhenEmpty: 'round',
+};
+export const setsCfg = (project) => ({ ...SETS_DEFAULTS, ...(automation(project).sets || {}) });
+const setsC = (project) => compileSets(project, setsCfg(project));
+export const setsCompiled = setsC;
+const scoreZones = (project) => (setsCfg(project).zones || []).filter((z) => zoneDef(project, z.zone));
+const mult = (z) => Number(z?.multiplier) || 1;
+
+function scoreZoneOf(project, st, zid) {
+  const z = st.zones[zid];
+  return z?.owner ? scoreZones(project).find((s) => s.zone === z.defId) : null;
+}
+
+// The tricks in one zone: { total, tricks: [{ id, label, cards, points }], loose: [uids] }
+export function zoneTricks(project, st, zid) {
+  const uids = st.zones[zid]?.cards || [];
+  const defOf = (u) => st.cards[u]?.defId;
+  return assignCards(bestTricks(setsC(project), uids.map(defOf)), uids, defOf);
+}
+
+// Every scoring zone of a player, with tricks and points.
+export function setsBreakdown(project, st, pid) {
+  const zones = scoreZones(project).map((s) => {
+    const zid = `${pid}.${s.zone}`;
+    const r = zoneTricks(project, st, zid);
+    return { zid, defId: s.zone, name: zoneDef(project, s.zone).name, multiplier: mult(s), secret: !!s.secret, raw: r.total, points: r.total * mult(s), tricks: r.tricks, loose: r.loose };
+  });
+  const pub = zones.filter((z) => !z.secret).reduce((a, z) => a + z.points, 0);
+  const hidden = zones.filter((z) => z.secret).reduce((a, z) => a + z.points, 0);
+  return { zones, public: pub, hidden, total: pub + hidden };
+}
+
+function setsRescore(project, st) {
+  const S = setsCfg(project);
+  if (!automation(project).autoScore) return;
+  for (const p of st.players) {
+    if (!(S.counter in p.counters)) continue;
+    const b = setsBreakdown(project, st, p.id);
+    p.counters[S.counter] = st.revealed ? b.total : b.public;
+  }
+}
+
+function swapCards(project, st, a, b) {
+  const ca = st.cards[a];
+  const cb = st.cards[b];
+  const za = st.zones[ca.zone];
+  const zb = st.zones[cb.zone];
+  const ia = za.cards.indexOf(a);
+  const ib = zb.cards.indexOf(b);
+  za.cards[ia] = b;
+  zb.cards[ib] = a;
+  [ca.zone, cb.zone] = [cb.zone, ca.zone];
+  ca.faceUp = zoneDef(project, zb.defId)?.faceUp ?? true;
+  cb.faceUp = zoneDef(project, za.defId)?.faceUp ?? true;
+}
+
+function startSets(project, st) {
+  const H = st.hand;
+  H.actionsUsed = 0;
+  H.discarding = false;
+  H.lastSeat = null;
+  st.turn.active = nextSeat(project, st, st.dealer);
+  st.turn.phase = 0;
+  H.firstSeat = st.turn.active;
+  setsRescore(project, st);
+  log(st, 'system', 'turn', `Turn 1: ${activePlayer(st).name}.`);
+}
+
+function setsApply(project, st, a, actor) {
+  const S = setsCfg(project);
+  const H = st.hand;
+  const who = player(st, actor).name;
+  if (activePlayer(st).id !== actor) throw new Error(`It is ${activePlayer(st).name}'s turn.`);
+  const handZ = `${actor}.hand`;
+  const limit = Number(S.handLimit) || 0;
+  const handCount = () => st.zones[handZ].cards.length;
+  const discardZ = resolveZone(st, S.discardZone, actor);
+  if (a.type === 'endTurn') {
+    if (limit && handCount() > limit) {
+      H.discarding = true;
+      log(st, actor, 'turn', `${who} has ${handCount()} cards and must discard down to ${limit}.`);
+      return;
+    }
+    log(st, actor, 'endTurn', `${who} ended their turn${H.actionsUsed < S.actions ? ` after ${H.actionsUsed} action${H.actionsUsed === 1 ? '' : 's'}` : ''}.`);
+    setsAdvance(project, st);
+    return;
+  }
+  const to = a.type === 'move' ? resolveZone(st, a.to, actor) : null;
+  if (H.discarding && !(a.type === 'move' && to && to === discardZ)) throw new Error(`Discard down to ${limit} cards first.`);
+  if (!H.discarding && H.actionsUsed >= S.actions) throw new Error('You have no actions left this turn.');
+  if (a.type === 'draw') {
+    const deck = st.zones[S.drawZone];
+    const top = deck?.cards[deck.cards.length - 1];
+    if (!top) throw new Error(`The ${deck?.name || 'draw pile'} is empty.`);
+    placeCard(project, st, top, handZ);
+    log(st, actor, 'draw', `${who} drew ${cardName(project, st, top)} from the ${deck.name}.`,
+      { publicText: `${who} drew a card from the ${deck.name}.`, data: { from: deck.id, to: handZ, count: 1 } });
+    setsUsed(project, st, actor);
+    return;
+  }
+  if (a.type === 'swap') {
+    const mine = st.cards[a.card];
+    const theirs = st.cards[a.with];
+    const market = st.zones[S.marketZone];
+    if (!mine || mine.zone !== handZ) throw new Error('Swap a card from your own hand.');
+    if (!theirs || theirs.zone !== S.marketZone) throw new Error(`Swap it for one of the face-up cards in the ${market?.name || 'market'}.`);
+    const mineName = cardName(project, st, a.card);
+    swapCards(project, st, a.card, a.with);
+    log(st, actor, 'swap', `${who} swapped ${mineName} from their hand for ${cardName(project, st, a.with)} from the ${market.name}.`, { data: { card: a.card, with: a.with } });
+    setsUsed(project, st, actor);
+    return;
+  }
+  const c = st.cards[a.card];
+  if (!c) throw new Error(`no card "${a.card}"`);
+  if (c.zone !== handZ) throw new Error('Play cards from your own hand.');
+  if (!to) throw new Error(`no zone "${a.to}"`);
+  const name = cardName(project, st, a.card);
+  const zone = st.zones[to];
+  const zname = zoneDef(project, zone.defId)?.name || zone.name;
+  if (to === discardZ) {
+    if (!H.discarding) throw new Error(`You only discard when you have more than ${limit} cards at the end of your turn.`);
+    placeCard(project, st, a.card, to, { faceUp: true });
+    log(st, actor, 'discard', `${who} discarded ${name}.`, { data: { card: a.card, to } });
+    if (handCount() <= limit) {
+      H.discarding = false;
+      setsAdvance(project, st);
+    }
+    return;
+  }
+  const sz = scoreZoneOf(project, st, to);
+  if (zone.owner === actor && sz) {
+    const before = zoneTricks(project, st, to);
+    placeCard(project, st, a.card, to);
+    const after = zoneTricks(project, st, to);
+    const gain = (after.total - before.total) * mult(sz);
+    const made = after.tricks.find((t) => t.cards.includes(a.card));
+    const done = gain > 0 ? ` - ${made ? `completes a ${made.label}` : 'improves their tricks'}: +${gain}` : '';
+    const faceUp = isPublicZone(project, st, to);
+    const text = `${who} played ${name}${faceUp ? '' : ' face down'} to their ${zname}${done}.`;
+    log(st, actor, 'play', text, { publicText: faceUp ? text : `${who} played a card face down to their ${zname}.`, data: { card: a.card, to, gain, combo: gain > 0 ? made?.label : undefined } });
+    setsUsed(project, st, actor);
+    return;
+  }
+  if (zone.owner && zone.owner !== actor && zone.defId === S.giveZone) {
+    const C = setsC(project);
+    const loose = zoneTricks(project, st, to).loose;
+    const best = bestTrickWith(C, loose.map((u) => st.cards[u].defId), c.defId);
+    const victim = player(st, zone.owner).name;
+    if (!best && S.giveNeedsTrick !== false) throw new Error(`${name} does not complete a trick in ${victim}'s ${zname} (cards already in a finished trick cannot be used).`);
+    placeCard(project, st, a.card, to, { faceUp: true });
+    if (!best) {
+      log(st, actor, 'give', `${who} gave ${name} to ${victim}'s ${zname}.`, { data: { card: a.card, to } });
+    } else {
+      const pool = loose.slice();
+      const taken = [a.card];
+      const need = best.defIds.slice();
+      need.splice(need.indexOf(c.defId), 1);
+      for (const d of need) taken.push(pool.splice(pool.findIndex((u) => st.cards[u].defId === d), 1)[0]);
+      const dest = st.zones[`${actor}.${S.captureZone}`] ? `${actor}.${S.captureZone}` : handZ;
+      const capZ = scoreZoneOf(project, st, dest);
+      const before = capZ ? zoneTricks(project, st, dest).total : 0;
+      for (const u of taken) placeCard(project, st, u, dest);
+      const gain = capZ ? (zoneTricks(project, st, dest).total - before) * mult(capZ) : 0;
+      const destName = zoneDef(project, st.zones[dest].defId)?.name || 'hand';
+      log(st, actor, 'steal', `${who} put ${name} into ${victim}'s ${zname}, completing a ${best.label} (${taken.map((u) => cardName(project, st, u)).join(', ')}) - and took it to their ${destName}${gain > 0 ? `: +${gain}` : ''}!`,
+        { data: { card: a.card, to, victim: zone.owner, cards: taken, combo: best.label, gain } });
+    }
+    setsUsed(project, st, actor);
+    return;
+  }
+  const mine = scoreZones(project).map((z) => zoneDef(project, z.zone).name).join(' or ');
+  throw new Error(`A card from your hand goes to your ${mine}${S.giveZone ? `, or into another player's ${zoneDef(project, S.giveZone)?.name} to complete a trick` : ''}.`);
+}
+
+function setsUsed(project, st, actor) {
+  const S = setsCfg(project);
+  const H = st.hand;
+  H.actionsUsed++;
+  setsRescore(project, st);
+  noteEmptyPile(project, st);
+  if (H.actionsUsed < S.actions) return;
+  const limit = Number(S.handLimit) || 0;
+  const n = st.zones[`${actor}.hand`].cards.length;
+  if (limit && n > limit) {
+    H.discarding = true;
+    log(st, actor, 'turn', `${player(st, actor).name} has ${n} cards and must discard ${n - limit}.`);
+    return;
+  }
+  setsAdvance(project, st);
+}
+
+function noteEmptyPile(project, st) {
+  const S = setsCfg(project);
+  const H = st.hand;
+  const deck = st.zones[S.drawZone];
+  if (!deck || deck.cards.length || H.lastSeat != null || S.endWhenEmpty === 'off') return;
+  if (S.endWhenEmpty === 'now') {
+    H.lastSeat = st.turn.active;
+    log(st, 'system', 'final', `The ${deck.name} is empty: the game ends after this turn.`);
+    return;
+  }
+  H.lastSeat = nextSeat(project, st, H.firstSeat, -1);
+  const last = st.players[H.lastSeat];
+  log(st, 'system', 'final', `The ${deck.name} is empty! ${last.id === activePlayer(st).id ? 'This is the last turn' : `Play goes on until ${last.name} has had a turn`}, so everyone has the same number of turns.`);
+}
+
+function setsAdvance(project, st) {
+  const H = st.hand;
+  snapshotTimeline(st);
+  if (H.lastSeat != null && st.turn.active === H.lastSeat) {
+    setsFinish(project, st, `the ${st.zones[setsCfg(project).drawZone]?.name || 'draw pile'} ran out`);
+    return;
+  }
+  for (const r of automation(project).endWhen || []) {
+    if (r.at !== 'turnEnd' || !r.expr) continue;
+    const hit = st.players.some((p) => { try { return runExpr(r.expr, formulaScope(project, st, p.id)); } catch { return false; } });
+    if (hit) { setsFinish(project, st, r.label || r.expr); return; }
+  }
+  H.actionsUsed = 0;
+  H.discarding = false;
+  st.turn.active = nextSeat(project, st, st.turn.active);
+  st.turn.number++;
+  log(st, 'system', 'turn', `Turn ${st.turn.number}: ${activePlayer(st).name}.`);
+}
+
+function setsFinish(project, st, reason) {
+  const S = setsCfg(project);
+  const secret = scoreZones(project).filter((z) => z.secret).map((z) => z.zone);
+  st.revealed = secret;
+  for (const c of Object.values(st.cards)) if (secret.includes(st.zones[c.zone].defId)) c.faceUp = true;
+  const before = Object.fromEntries(st.players.map((p) => [p.id, { ...p.counters }]));
+  setsRescore(project, st);
+  if (secret.length) log(st, 'system', 'hand', `Dawn breaks: the face-down ${secret.map((z) => zoneDef(project, z).name).join(' and ')} are revealed.`);
+  const scoreLines = st.players.map((p) => {
+    const b = setsBreakdown(project, st, p.id);
+    const parts = b.zones.map((z) => `${z.name} ${z.raw}${z.multiplier !== 1 ? ` ×${z.multiplier} = ${z.points}` : ''}${z.tricks.length ? ` (${z.tricks.map((t) => t.label).join(', ')})` : ''}`);
+    const line = `${p.name}: ${parts.join('; ')} → ${b.total} points.`;
+    log(st, 'system', 'score', line);
+    return line;
+  });
+  const c = S.counter;
+  const best = Math.max(...st.players.map((p) => p.counters[c] ?? 0));
+  const winners = st.players.filter((p) => (p.counters[c] ?? 0) === best).map((p) => p.id);
+  st.lastHand = {
+    number: 1,
+    summary: `Game over - ${reason}.`,
+    winner: null,
+    scoreLines,
+    tricks: null,
+    changes: st.players.map((p) => ({ id: p.id, name: p.name, deltas: Object.fromEntries(Object.keys(p.counters).map((k) => [k, p.counters[k] - (before[p.id][k] ?? 0)])), totals: { ...p.counters } })),
+  };
+  snapshotTimeline(st);
+  finishGame(st, winners, reason.charAt(0).toUpperCase() + reason.slice(1), 'system');
+}
+
+function setsLegal(project, st, pid, out) {
+  const S = setsCfg(project);
+  const H = st.hand;
+  const C = setsC(project);
+  const hand = st.zones[`${pid}.hand`]?.cards || [];
+  const limit = Number(S.handLimit) || 0;
+  const nm = (u) => cardName(project, st, u);
+  const discardZ = resolveZone(st, S.discardZone, pid);
+  out.options = [];
+  out.actionsLeft = Math.max(0, S.actions - H.actionsUsed);
+  out.actionsPerTurn = S.actions;
+  out.discarding = !!H.discarding;
+  out.handLimit = limit;
+  out.target = null;
+  if (H.discarding) {
+    for (const u of hand) {
+      out.cards[u] = '';
+      out.legal.push(u);
+      out.options.push({ kind: 'discard', card: u, to: discardZ, label: `Discard ${nm(u)}`, action: { type: 'move', card: u, to: discardZ } });
+    }
+    out.summary = `You have ${hand.length} cards: discard ${hand.length - limit} to get down to ${limit}.`;
+    return out;
+  }
+  out.canPass = true;
+  if (!out.actionsLeft) {
+    for (const u of hand) out.cards[u] = 'No actions left this turn.';
+    out.options.push({ kind: 'end', label: 'End your turn', action: { type: 'endTurn' } });
+    out.summary = 'No actions left: end your turn.';
+    return out;
+  }
+  const deck = st.zones[S.drawZone];
+  out.canDraw = !!deck?.cards.length;
+  if (out.canDraw) out.options.push({ kind: 'draw', label: `Draw a card from the ${deck.name}`, action: { type: 'draw' }, gain: 0 });
+  const market = st.zones[S.marketZone]?.cards || [];
+  const marketName = st.zones[S.marketZone]?.name || 'market';
+  const defs = (zid) => (st.zones[zid]?.cards || []).map((u) => st.cards[u].defId);
+  const own = scoreZones(project).map((s) => ({ s, zid: `${pid}.${s.zone}` })).filter((x) => st.zones[x.zid]);
+  const ownBase = own.map((x) => bestTricks(C, defs(x.zid)).total);
+  const giveName = zoneDef(project, S.giveZone)?.name || '';
+  const capZ = scoreZones(project).find((z) => z.zone === S.captureZone);
+  const opps = S.giveZone ? st.players.filter((o) => o.id !== pid).map((o) => ({ o, zid: `${o.id}.${S.giveZone}` })).filter((x) => st.zones[x.zid]) : [];
+  const oppLoose = opps.map((x) => zoneTricks(project, st, x.zid).loose.map((u) => st.cards[u].defId));
+  for (const u of hand) {
+    out.cards[u] = '';
+    out.legal.push(u);
+    const d = st.cards[u].defId;
+    own.forEach((x, i) => {
+      const gain = (bestTricks(C, [...defs(x.zid), d]).total - ownBase[i]) * mult(x.s);
+      const zname = zoneDef(project, x.s.zone).name;
+      const up = isPublicZone(project, st, x.zid);
+      out.options.push({ kind: 'play', card: u, to: x.zid, gain, label: `Play to your ${zname}${up ? '' : ' (face down)'}${gain > 0 ? ` - completes a trick: +${gain}` : ''}`, action: { type: 'move', card: u, to: x.zid } });
+    });
+    opps.forEach((x, i) => {
+      const best = bestTrickWith(C, oppLoose[i], d);
+      if (!best && S.giveNeedsTrick !== false) return;
+      out.options.push({
+        kind: 'give', card: u, to: x.zid, victim: x.o.id, gain: best ? best.points * mult(capZ) : 0,
+        label: best ? `Complete ${x.o.name}'s ${best.label} and take it (+${best.points * mult(capZ)})` : `Give to ${x.o.name}'s ${giveName}`,
+        action: { type: 'move', card: u, to: x.zid },
+      });
+    });
+    for (const m of market) out.options.push({ kind: 'swap', card: u, with: m, gain: 0, label: `Swap for ${nm(m)} (${marketName})`, action: { type: 'swap', card: u, with: m } });
+  }
+  out.options.push({ kind: 'end', label: 'End your turn now', action: { type: 'endTurn' } });
+  const can = [out.canDraw ? 'draw a card' : '', market.length ? `swap a card with one of the ${marketName}` : '', 'play a card to your tricks',
+    out.options.some((o) => o.kind === 'give') ? "complete a trick in another player's zone" : ''].filter(Boolean);
+  out.summary = `${out.actionsLeft} action${out.actionsLeft === 1 ? '' : 's'} left: ${can.join(', ')}.`;
+  return out;
+}
+
+function checkSets(project, st, action, actor) {
+  const S = setsCfg(project);
+  const active = activePlayer(st);
+  if (['move', 'draw', 'swap', 'endTurn'].includes(action.type) && actor !== active.id) return `It is ${active.name}'s turn, not ${player(st, actor).name}'s.`;
+  const lm = legalMoves(project, st, actor);
+  switch (action.type) {
+    case 'draw':
+      return lm.discarding ? `Discard down to ${lm.handLimit} cards first.` : !lm.actionsLeft ? 'You have no actions left - end your turn.' : !lm.canDraw ? 'The draw pile is empty.' : null;
+    case 'swap':
+    case 'move': {
+      const to = action.type === 'move' ? resolveZone(st, action.to, actor) : null;
+      const ok = lm.options.some((o) => o.action.type === action.type && o.action.card === action.card && (action.type === 'swap' ? o.action.with === action.with : o.action.to === to));
+      if (ok) return null;
+      if (lm.discarding) return `Discard down to ${lm.handLimit} cards first: move a card from your hand to the ${st.zones[S.discardZone]?.name || 'discard pile'}.`;
+      if (!lm.actionsLeft) return 'You have no actions left - end your turn.';
+      const c = st.cards[action.card];
+      if (!c || c.zone !== `${actor}.hand`) return 'Use a card from your own hand.';
+      if (action.type === 'swap') return `Swap it for one of the face-up cards in the ${st.zones[S.marketZone]?.name || 'market'}.`;
+      const z = to && st.zones[to];
+      if (z?.owner && z.owner !== actor && z.defId === S.giveZone) return `${cardName(project, st, action.card)} does not complete a trick in ${player(st, z.owner).name}'s ${zoneDef(project, z.defId).name} (cards already in a finished trick cannot be used).`;
+      if (to === resolveZone(st, S.discardZone, actor)) return `You only discard when you have more than ${lm.handLimit} cards at the end of your turn.`;
+      return `Play it to your own ${scoreZones(project).map((x) => zoneDef(project, x.zone).name).join(' or ')}, swap it, or use it to complete a trick in another player's ${zoneDef(project, S.giveZone)?.name || 'zone'}.`;
+    }
+    case 'endTurn': return null;
+    case 'flip': case 'shuffle': case 'phase': return `"${action.type}" is not part of this game.`;
+    case 'counter': return automation(project).autoScore ? 'Scoring is automatic in this game.' : null;
+    default: return null;
+  }
+}
+
+// A simple heuristic player for set-collection games (the "quick bot").
+// Returns the actions for the rest of the turn, stopping after a draw (the
+// drawn card is not known until it is drawn).
+export function setsBotTurn(project, st, pid) {
+  const sim = clone({ ...st, log: [], timeline: [] });
+  const out = [];
+  for (let k = 0; k < 12; k++) {
+    if (sim.status !== 'playing' || activePlayer(sim).id !== pid) break;
+    const a = setsBotChoice(project, sim, pid);
+    if (!a) break;
+    out.push(a);
+    try { apply(project, sim, { ...a, actor: pid }); } catch { break; }
+    if (a.type === 'draw' || a.type === 'endTurn') break;
+  }
+  return out;
+}
+
+function setsBotChoice(project, st, pid) {
+  const S = setsCfg(project);
+  const C = setsC(project);
+  const lm = legalMoves(project, st, pid);
+  if (!lm) return null;
+  const def = (u) => st.cards[u].defId;
+  const hand = st.zones[`${pid}.hand`].cards;
+  const handDefs = hand.map(def);
+  const zones = scoreZones(project);
+  const safe = zones.find((z) => z.secret) || zones.slice().sort((a, b) => mult(a) - mult(b))[0];
+  const safeZ = safe ? `${pid}.${safe.zone}` : null;
+  const safeLoose = safeZ && st.zones[safeZ] ? zoneTricks(project, st, safeZ).loose.map(def) : [];
+  const plan = (cards) => bestTricks(C, [...cards, ...safeLoose]).total;
+  const find = (pred) => lm.options.find(pred)?.action || null;
+  if (lm.discarding) {
+    let pick = null; let bestLeft = -1;
+    for (const [i, u] of hand.entries()) {
+      const left = plan(handDefs.filter((_, j) => j !== i)) * 100 - (C.values[def(u)] || 0);
+      if (left > bestLeft) { bestLeft = left; pick = u; }
+    }
+    return find((o) => o.kind === 'discard' && o.card === pick);
+  }
+  if (!lm.actionsLeft) return { type: 'endTurn' };
+  // 1. Take a trick from someone, or finish one of my own.
+  const now = lm.options.filter((o) => (o.kind === 'give' || o.kind === 'play') && o.gain > 0).sort((a, b) => b.gain - a.gain)[0];
+  if (now) return now.action;
+  // 2. A trick I can finish this turn in a face-up (multiplied) zone: start it now.
+  const left = lm.actionsLeft;
+  let start = null;
+  for (const z of zones.filter((x) => !x.secret)) {
+    const zid = `${pid}.${z.zone}`;
+    const loose = zoneTricks(project, st, zid).loose.map(def);
+    for (const t of bestTricks(C, [...loose, ...handDefs]).tricks) {
+      const pool = loose.slice();
+      const fromHand = t.defIds.filter((d) => { const i = pool.indexOf(d); if (i >= 0) { pool.splice(i, 1); return false; } return true; });
+      if (!fromHand.length || fromHand.length > left) continue;
+      const value = t.points * mult(z);
+      if (!start || value > start.value) start = { value, zid, card: hand[handDefs.indexOf(fromHand[0])] };
+    }
+  }
+  if (start && (!safe || start.value > 0)) return find((o) => o.kind === 'play' && o.card === start.card && o.to === start.zid);
+  // 3. Build a trick in the safe (face-down) zone.
+  if (safeZ) {
+    const r = bestTricks(C, [...safeLoose, ...handDefs]);
+    const pool = safeLoose.slice();
+    const candidates = r.tricks.map((t) => {
+      const p = pool.slice();
+      const fromHand = t.defIds.filter((d) => { const i = p.indexOf(d); if (i >= 0) { p.splice(i, 1); return false; } return true; });
+      return { t, fromHand };
+    }).filter((x) => x.fromHand.length).sort((a, b) => a.fromHand.length - b.fromHand.length || b.t.points - a.t.points);
+    if (candidates.length) {
+      const card = hand[handDefs.indexOf(candidates[0].fromHand[0])];
+      const a = find((o) => o.kind === 'play' && o.card === card && o.to === safeZ);
+      if (a) return a;
+    }
+  }
+  // 4. Swap for a face-up card that makes a new trick possible.
+  const base = plan(handDefs);
+  let swap = null;
+  for (const o of lm.options.filter((x) => x.kind === 'swap')) {
+    const i = hand.indexOf(o.card);
+    const gain = plan([...handDefs.filter((_, j) => j !== i), def(o.with)]) - base;
+    if (gain > 0 && (!swap || gain > swap.gain)) swap = { gain, a: o.action };
+  }
+  if (swap) return swap.a;
+  // 5. Draw while there is room in the hand.
+  const limit = lm.handLimit || 99;
+  if (lm.canDraw && hand.length < limit) return { type: 'draw' };
+  // 6. A full hand: commit the most common card type towards a future trick.
+  if (safeZ && hand.length) {
+    const count = (d) => handDefs.filter((x) => x === d).length + safeLoose.filter((x) => x === d).length;
+    const card = hand.slice().sort((a, b) => count(def(b)) - count(def(a)))[0];
+    const a = find((o) => o.kind === 'play' && o.card === card && o.to === safeZ);
+    if (a && count(def(card)) > 1) return a;
+  }
+  if (lm.canDraw) return { type: 'draw' };
+  return { type: 'endTurn' };
+}
+
 // ------------------------------------------------------------------ announcements
 // Things a player must say around playing a card ("Last card!"). Each rule:
 //   { id, label, check: 'afterPlay' | 'beforePlay', when: formula,
@@ -1196,6 +1685,7 @@ export function legalMoves(project, st, pid) {
     return out;
   }
   if (isShedding(project)) return shedLegal(project, st, pid, out);
+  if (isSets(project)) return setsLegal(project, st, pid, out);
   const led = st.hand.led;
   const suit = (u) => statOf(project, st, u, T.suitStat);
   const canFollow = T.followSuit && led != null && hand.some((u) => suit(u) === led);
@@ -1229,6 +1719,7 @@ export function checkAction(project, st, action) {
     return st.catchable.pid === actor ? 'You cannot catch yourself.' : null;
   }
   if (isShedding(project)) return checkShed(project, st, action, actor);
+  if (isSets(project)) return checkSets(project, st, action, actor);
   const T = A.tricks;
   const trickName = zoneDef(project, T.zone)?.name || 'trick';
   switch (action.type) {
@@ -1304,6 +1795,23 @@ export function describeAutomation(project) {
     }
     lines.push('The starting card is never an action or wild card. When the draw pile runs out, the discard pile (except its top card) is shuffled to form a new one.');
     lines.push((A.endWhen || []).length ? 'The first player to empty their hand wins the round; rounds are scored and a new round is dealt until the game ends.' : 'The first player to empty their hand wins the game.');
+  } else if (A.style === 'sets') {
+    const S = setsCfg(project);
+    const zn = (id) => zoneDef(project, id)?.name || id;
+    const zs = scoreZones(project);
+    lines.push(`Set collection: on your turn take up to ${S.actions} action${S.actions === 1 ? '' : 's'} (the same one more than once is fine): draw a card from the ${zn(S.drawZone)}; ${zoneDef(project, S.marketZone) ? `swap a card from your hand for a face-up card in the ${zn(S.marketZone)} (it takes that card's place); ` : ''}play a card from your hand to your ${zs.map((z) => `${zn(z.zone)}${zoneDef(project, z.zone)?.faceUp === false ? ' (face down)' : ' (face up)'}`).join(' or ')}${zoneDef(project, S.giveZone) ? `; or put a card into another player's ${zn(S.giveZone)}${S.giveNeedsTrick !== false ? ' when it completes a trick there' : ''} - you then take the whole trick to your ${zn(S.captureZone)}` : ''}.`);
+    lines.push(`Scoring: each zone scores the best way of splitting its cards into the tricks below - each card counts in at most one trick, and cards in no trick score nothing. A trick is worth the sum of its cards' "${S.valueStat}" stat unless noted, times the zone's multiplier: ${zs.map((z) => `${zn(z.zone)} ×${mult(z)}${z.secret ? ' (kept secret until the end of the game)' : ''}`).join(', ')}.`);
+    if (zoneDef(project, S.giveZone)) lines.push(`Cards that are already part of a finished trick are safe: only a player's loose cards can be used to complete a trick in their ${zn(S.giveZone)}.`);
+    if (Number(S.handLimit)) lines.push(`Hand limit: at the end of your turn you must discard down to ${S.handLimit} cards.`);
+    lines.push('Tricks:');
+    const C = setsC(project);
+    for (const cb of C.combos) lines.push(`  • ${cb.label}: ${cb.slots.map((s) => s.text).join(' + ')}${cb.points && cb.points !== 'sum' ? ` - scores ${cb.points} (sum = the cards' values)` : ''}`);
+    for (const e of C.errors) lines.push(`  ⚠ ${e}`);
+    lines.push({
+      round: `When the ${zn(S.drawZone)} runs out, play continues until everyone has had the same number of turns; then the game ends${zs.some((z) => z.secret) ? ', secret zones are revealed and scored,' : ''} and the highest score wins.`,
+      now: `When the ${zn(S.drawZone)} runs out the game ends after that turn${zs.some((z) => z.secret) ? '; secret zones are revealed and scored' : ''}, and the highest score wins.`,
+      off: 'The game ends only by the end conditions below.',
+    }[S.endWhenEmpty] || '');
   } else {
     lines.push('Free-form: players (or AI seats) move cards and apply the rules themselves.');
   }

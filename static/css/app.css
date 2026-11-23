@@ -126,6 +126,7 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; }
 .card.face { background: var(--card-bg); color: var(--card-ink); border: 1px solid rgba(0,0,0,.25); display: flex; flex-direction: column; padding: .45em; gap: .3em; }
 .card-title { font-weight: 700; font-size: 1.15em; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .card-art { flex: 1 1 40%; min-height: 20%; background: center / cover no-repeat; border-radius: .3em; border: 1px solid rgba(0,0,0,.2); }
+.card-icon { flex: 1 1 30%; min-height: 0; display: grid; place-items: center; font-size: 3.6em; line-height: 1; }
 .card-sub { font-style: italic; opacity: .8; font-size: .9em; line-height: 1.15; }
 .card-rules { font-size: .88em; line-height: 1.2; overflow: hidden; flex: 1 1 auto; background: rgba(255,255,255,.35); border-radius: .3em; padding: .25em .35em; white-space: pre-wrap; }
 .card-stats { display: flex; flex-wrap: wrap; gap: .25em .6em; font-size: .85em; margin-top: auto; }
@@ -371,3 +372,7 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; }
 .tabs a.player-link { margin-left: 6px; color: var(--accent); font-weight: 600; }
 .src-badge { margin-left: 6px; }
 .session-list li.revoked { opacity: .55; }
+
+/* set collection: trick summary under a scoring zone */
+.set-summary { margin-top: 3px; padding: 2px 6px; border-radius: 4px; background: rgba(46,157,91,.14); color: inherit; }
+.felt .set-summary { background: rgba(0,0,0,.25); color: #f6efd9; }

@@ -10,7 +10,8 @@ import * as api from './api.js';
 import { isAI, randomBot } from './ai.js';
 import {
   activePlayer, announcementRules, apply, automation, cardDef, cardEffects, checkAction, competitors, createGame,
-  describeAutomation, isAutomated, isShedding, isTricks, isVisibleTo, legalMoves, player, shedColours, shedTop, teamOf,
+  describeAutomation, isAutomated, isSets, isShedding, isTricks, isVisibleTo, legalMoves, player, setsBreakdown, setsCfg, shedColours, shedTop,
+  teamOf, zoneTricks,
 } from './engine.js';
 import { SUITS, applyVariants, normalizeProject, uid, zoneDef } from './model.js';
 import { finishTurn, rollAiCatch, takeAiTurn } from './turns.js';
@@ -20,7 +21,7 @@ const app = document.getElementById('app');
 const HUMAN = 'p1';
 const OPPONENTS = [['Ava', '🦊'], ['Ben', '🐻'], ['Cai', '🦉'], ['Dot', '🐢'], ['Eli', '🐙']];
 const PROVIDERS = {
-  random: { label: 'Quick bots', note: 'instant moves, they play at random' },
+  random: { label: 'Quick bots', note: 'instant moves, simple tactics' },
   anthropic: { label: 'Claude', note: 'thinks for a few seconds each turn' },
   openai: { label: 'ChatGPT', note: 'thinks for a few seconds each turn' },
 };
@@ -43,6 +44,7 @@ let turnStartedAt = Date.now();
 let lastHandSeen = 0;
 let saveTimer = null;
 let saveFailed = false;
+let sel = null; // set-collection games: the hand card the player has picked up
 
 // "&fast=1" in the address shortens the pauses between AI moves (for testing).
 const SPEED = /(?:^|[#&])fast=1/.test(location.hash) ? 0.12 : 1;
@@ -164,7 +166,7 @@ function start() {
   } catch (e) {
     return message('This game cannot start yet', h('p', {}, e.message));
   }
-  bubbles = {}; feed = []; thinking = null; lastHandSeen = 0; saveFailed = false;
+  bubbles = {}; feed = []; thinking = null; lastHandSeen = 0; saveFailed = false; sel = null;
   const picksText = Object.fromEntries((base.variants || []).map((v) => [v.label, v.choices[choices.picks[v.id] ?? v.default ?? 0]?.label]));
   session = {
     id: uid('v_'),
@@ -212,10 +214,14 @@ function catchUp(from, quiet = false) {
     if (e.type === 'assess' || e.data?.kind === 'reasoning' || e.data?.kind === 'feedback') continue;
     if (e.type === 'setup' || e.type === 'shuffle' || e.type === 'pause') continue;
     if (e.actor === 'system' && e.type === 'note') continue; // harness warnings stay in the test bench log
-    const text = e.publicText;
-    const kind = ['trick', 'hand', 'endGame', 'trump', 'score'].includes(e.type) ? 'big' : e.type === 'penalty' || e.type === 'announce' ? 'alert' : e.actor === HUMAN ? 'me' : 'play';
+    const text = e.actor === HUMAN ? e.text : e.publicText; // your own moves in full
+    const kind = ['trick', 'hand', 'endGame', 'trump', 'score', 'steal'].includes(e.type) ? 'big' : ['penalty', 'announce', 'final'].includes(e.type) ? 'alert' : e.actor === HUMAN ? 'me' : 'play';
     pushFeed({ text, kind, actor: e.actor });
-    if (player(st, e.actor) && ['play', 'draw', 'pass', 'announce', 'move', 'endTurn'].includes(e.type)) bubbles[e.actor] = text.replace(new RegExp(`^${escapeRe(player(st, e.actor).name)}:?\\s*`), '');
+    if (player(st, e.actor) && ['play', 'draw', 'pass', 'announce', 'move', 'endTurn', 'swap', 'steal', 'give', 'discard'].includes(e.type)) bubbles[e.actor] = text.replace(new RegExp(`^${escapeRe(player(st, e.actor).name)}:?\\s*`), '');
+    if (!quiet && e.type === 'steal' && e.actor === HUMAN) toast(`🎉 You completed ${player(st, e.data.victim).name}'s ${e.data.combo} and took it!${e.data.gain ? ` +${e.data.gain}` : ''}`, 'win', 3500);
+    else if (!quiet && e.type === 'steal' && e.data?.victim === HUMAN) toast(`😱 ${player(st, e.actor).name} completed your ${e.data.combo} and took it!`, 'warn', 4000);
+    else if (!quiet && e.type === 'play' && e.actor === HUMAN && e.data?.gain > 0) toast(e.data.combo ? `🎉 ${e.data.combo} complete! +${e.data.gain}` : `🎉 Your tricks improved: +${e.data.gain}`, 'win', 3000);
+    else if (!quiet && e.type === 'final') toast(e.text, 'info', 4500);
   }
   if (!quiet) celebrate();
 }
@@ -306,7 +312,8 @@ async function act(action) {
     toast(e.message, 'error');
     return false;
   }
-  tele('move', { action: action.type, card: action.card ? cname(action.card) : undefined, ms: Date.now() - turnStartedAt });
+  sel = null;
+  tele('move', { action: action.type, card: action.card ? cname(action.card) : undefined, to: action.to, ms: Date.now() - turnStartedAt });
   catchUp(from);
   save();
   render();
@@ -332,6 +339,13 @@ function continuePlay() {
 function playCard(u) {
   const lm = legalMoves(game, st, HUMAN);
   if (!lm) return freeFormMenu(u);
+  if (lm.options) {
+    // Set collection: discard straight away when a discard is due; otherwise pick the card up.
+    if (lm.discarding) return act(lm.options.find((o) => o.card === u)?.action);
+    if (lm.cards[u]) { shake(u); return toast(lm.cards[u], 'warn', 3000); }
+    sel = sel === u ? null : u;
+    return render();
+  }
   if (lm.cards[u]) {
     tele('illegalClick', { card: cname(u), reason: lm.cards[u] });
     shake(u);
@@ -384,7 +398,8 @@ function render() {
 
 function topBar() {
   const H = st.hand;
-  const where = isTricks(game) && H ? `Hand ${H.number} · trick ${Math.min(13, H.tricksPlayed + 1)}` : isShedding(game) && H ? `Round ${H.number}` : `Turn ${st.turn.number}`;
+  const where = isTricks(game) && H ? `Hand ${H.number} · trick ${Math.min(13, H.tricksPlayed + 1)}` : isShedding(game) && H ? `Round ${H.number}`
+    : isSets(game) && H ? `Turn ${st.turn.number} · ${st.zones[setsCfg(game).drawZone]?.name || 'draw pile'}: ${st.zones[setsCfg(game).drawZone]?.cards.length ?? 0} left` : `Turn ${st.turn.number}`;
   const c0 = game.counters[0];
   const scores = c0 ? competitors(st).map((c) => {
     const mine = c.id === HUMAN || c.id === teamOf(st, HUMAN)?.id;
@@ -405,7 +420,7 @@ function opponent(p, winners) {
   const team = teamOf(st, p.id);
   const partner = team && isMate(p.id);
   const chips = [];
-  if (st.hand && st.dealer === p.seat) chips.push(h('span', { class: 'pv-chip' }, 'Dealer'));
+  if (st.hand && st.dealer === p.seat && !isSets(game)) chips.push(h('span', { class: 'pv-chip' }, 'Dealer'));
   if (isTricks(game) && st.hand) chips.push(h('span', { class: 'pv-chip' }, `Tricks ${st.hand.tricksWon[p.id] || 0}`));
   if (isShedding(game) && n === 1 && st.status === 'playing') chips.push(h('span', { class: 'pv-chip red' }, 'Last card!'));
   if (st.catchable?.pid === p.id) chips.push(h('span', { class: 'pv-chip red' }, `didn't say "${st.catchable.label}"`));
@@ -420,7 +435,72 @@ function opponent(p, winners) {
       h('span', { class: 'pv-count' }, n)),
     game.counters.length ? h('div', { class: 'pv-opp-score small' }, game.counters.map((c) => `${c.name} ${p.counters[c.id]}`).join(' · ')) : null,
     chips.length ? h('div', { class: 'pv-chips' }, chips) : null,
+    isSets(game) && st.hand ? oppSets(p) : null,
     thinking === p.id ? h('div', { class: 'pv-dots' }, h('span'), h('span'), h('span')) : null);
+}
+
+// ---------------------------------------------------------------- set collection
+const scoreZoneCfg = (zid) => setsCfg(game).zones.find((z) => z.zone === st.zones[zid]?.defId);
+const selOptions = () => (sel && myTurn() ? (legalMoves(game, st, HUMAN)?.options || []).filter((o) => o.card === sel) : []);
+
+// A compact card: the icon (or initial) on the card's colour.
+function chipCard(u) {
+  const d = cardDef(game, st, u);
+  if (!isVisibleTo(game, st, u, HUMAN) || !d) return h('span', { class: 'pv-chipcard back', style: { background: game.cardBack.color } });
+  return h('span', { class: 'pv-chipcard', style: { background: d.color }, title: `${d.name}${d.rules ? ' - ' + d.rules : ''}` }, d.icon || d.name.slice(0, 2));
+}
+
+// A scoring zone as groups of tricks plus the loose cards.
+function trickGroups(zid, { compact = false } = {}) {
+  const z = st.zones[zid];
+  const cfg = scoreZoneCfg(zid);
+  const m = Number(cfg?.multiplier) || 1;
+  const r = zoneTricks(game, st, zid);
+  const own = z.owner === HUMAN;
+  const card = (u) => {
+    if (compact) return chipCard(u);
+    const d = cardDef(game, st, u);
+    const el = isVisibleTo(game, st, u, HUMAN) && d ? cardFace(d) : cardBack(game);
+    if (!st.cards[u].faceUp && own) el.classList.add('pv-facedown');
+    return el;
+  };
+  return h('div', { class: `pv-sets ${compact ? 'compact' : ''}` },
+    r.tricks.map((t) => h('div', { class: 'pv-tg' }, h('div', { class: 'pv-tg-cards' }, t.cards.map(card)),
+      h('div', { class: 'pv-tg-label' }, `${t.label} ${t.points}${m !== 1 ? ` ×${m} = ${t.points * m}` : ''}`))),
+    r.loose.length ? h('div', { class: `pv-tg loose ${cfg?.secret ? '' : 'risk'}` }, h('div', { class: 'pv-tg-cards' }, r.loose.map(card)),
+      h('div', { class: 'pv-tg-label' }, cfg?.secret ? 'not in a trick yet' : own ? 'loose - others can complete these' : 'loose')) : null,
+    !z.cards.length ? h('div', { class: 'pv-empty' }, compact ? '-' : 'empty') : null);
+}
+
+function oppSets(p) {
+  const opts = selOptions().filter((o) => o.kind === 'give' && o.victim === p.id);
+  return h('div', { class: 'pv-opp-sets' }, setsCfg(game).zones.filter((z) => st.zones[`${p.id}.${z.zone}`]).map((z) => {
+    const zid = `${p.id}.${z.zone}`;
+    const name = zoneDef(game, z.zone).name;
+    if (z.secret && !st.revealed) {
+      const n = st.zones[zid].cards.length;
+      return h('div', { class: 'pv-opp-zone' }, h('span', { class: 'pv-zone-label' }, `${name}: ${n} card${n === 1 ? '' : 's'} face down`));
+    }
+    const o = opts.find((x) => x.to === zid);
+    return h('div', {
+      class: `pv-opp-zone ${o ? 'pv-target' : ''}`, title: o ? o.label : '',
+      onclick: o ? () => act(o.action) : null,
+    }, h('span', { class: 'pv-zone-label' }, name, o ? h('b', { class: 'pv-target-hint' }, ` ← ${o.label}`) : null), trickGroups(zid, { compact: true }));
+  }));
+}
+
+function mySets() {
+  const opts = selOptions();
+  return h('div', { class: 'pv-my-sets' }, setsCfg(game).zones.filter((z) => st.zones[`${HUMAN}.${z.zone}`]).map((z) => {
+    const zid = `${HUMAN}.${z.zone}`;
+    const o = opts.find((x) => x.kind === 'play' && x.to === zid);
+    const def = zoneDef(game, z.zone);
+    const points = zoneTricks(game, st, zid).total * (Number(z.multiplier) || 1);
+    return h('div', { class: `pv-my-zone ${o ? 'pv-target' : ''} ${o?.gain > 0 ? 'scores' : ''}`, onclick: o ? () => act(o.action) : null, title: o ? o.label : '' },
+      h('div', { class: 'pv-zone-label' }, h('b', {}, def.name), ` ×${Number(z.multiplier) || 1}${def.faceUp === false ? ' · face down, secret until the end' : ' · face up'} · ${points} pts`,
+        o ? h('b', { class: 'pv-target-hint' }, o.gain > 0 ? ` ← tap to play: +${o.gain}` : ' ← tap to play here') : null),
+      trickGroups(zid));
+  }));
 }
 
 function zoneView(zid) {
@@ -429,7 +509,8 @@ function zoneView(zid) {
   const H = st.hand;
   const trickZone = isTricks(game) && H && z.defId === automation(game).tricks.zone;
   const lm = myTurn() ? legalMoves(game, st, HUMAN) : null;
-  const drawPile = isShedding(game) && zid === automation(game).shedding.drawZone;
+  const drawPile = (isShedding(game) && zid === automation(game).shedding.drawZone) || (isSets(game) && zid === setsCfg(game).drawZone);
+  const market = isSets(game) && zid === setsCfg(game).marketZone;
   const cardEl = (u) => {
     const d = cardDef(game, st, u);
     return isVisibleTo(game, st, u, HUMAN) && d ? cardFace(d) : cardBack(game);
@@ -450,6 +531,15 @@ function zoneView(zid) {
       el.addEventListener('click', () => (isAutomated(game) ? act({ type: 'draw' }) : act({ type: 'draw', from: zid })));
     }
     body = h('div', { class: 'pv-pile', style: { '--depth': Math.min(6, Math.ceil(z.cards.length / 8)) } }, el);
+  } else if (market) {
+    const swaps = selOptions().filter((o) => o.kind === 'swap');
+    body = z.cards.length ? z.cards.map((u) => {
+      const el = cardEl(u);
+      const o = swaps.find((x) => x.with === u);
+      if (o) { el.classList.add('pv-drawable'); el.title = `Swap your ${cname(sel)} for ${cname(u)}`; el.addEventListener('click', () => act(o.action)); }
+      else if (myTurn()) el.title = 'To swap: tap a card in your hand, then tap this card';
+      return el;
+    }) : h('div', { class: 'pv-empty' }, 'empty');
   } else {
     body = z.cards.length ? z.cards.map(cardEl) : h('div', { class: 'pv-empty' }, 'empty');
   }
@@ -522,9 +612,21 @@ function myArea() {
   const handZ = `${HUMAN}.hand`;
   const cards = sortHand(st.zones[handZ]?.cards || []);
   const wonZone = isTricks(game) ? `${HUMAN}.${automation(game).tricks.wonZone}` : null;
-  const others = st.zoneOrder.filter((z) => st.zones[z].owner === HUMAN && z !== handZ && z !== wonZone);
+  const sets = isSets(game) && st.hand;
+  const setZones = sets ? setsCfg(game).zones.map((z) => `${HUMAN}.${z.zone}`) : [];
+  const others = st.zoneOrder.filter((z) => st.zones[z].owner === HUMAN && z !== handZ && z !== wonZone && !setZones.includes(z));
   const actions = [];
-  if (myTurn()) {
+  if (myTurn() && sets && lm?.options) {
+    if (!lm.discarding) {
+      for (const o of selOptions().filter((x) => x.kind !== 'swap')) {
+        actions.push(h('button', { class: `btn ${o.gain > 0 ? 'primary' : ''}`, onclick: () => act(o.action) }, o.kind === 'give' ? `🗡 ${o.label}` : o.label));
+      }
+      if (sel && selOptions().some((x) => x.kind === 'swap')) actions.push(h('span', { class: 'pv-hint' }, `…or tap one of the ${st.zones[setsCfg(game).marketZone]?.name || 'face-up cards'} to swap`));
+      if (sel) actions.push(h('button', { class: 'btn small', onclick: () => { sel = null; render(); } }, 'Cancel'));
+      if (!sel && lm.canDraw) actions.push(h('button', { class: 'btn', onclick: () => act({ type: 'draw' }) }, `Draw from the ${st.zones[setsCfg(game).drawZone]?.name || 'pile'}`));
+      if (!sel) actions.push(h('button', { class: `btn ${lm.actionsLeft ? '' : 'primary'}`, onclick: () => act({ type: 'endTurn' }) }, lm.actionsLeft ? 'End turn early' : 'End turn'));
+    }
+  } else if (myTurn()) {
     if (lm?.canDraw && isShedding(game)) actions.push(h('button', { class: `btn ${lm.legal.length ? '' : 'primary'}`, onclick: () => act({ type: 'draw' }) }, lm.takeCount ? `Take ${lm.takeCount} cards` : 'Draw a card'));
     if (lm?.canPass) actions.push(h('button', { class: 'btn', onclick: () => act({ type: 'endTurn' }) }, 'Pass'));
     for (const r of announcementRules(game)) {
@@ -537,11 +639,17 @@ function myArea() {
     actions.unshift(h('button', { class: 'btn catch-btn pv-catch', onclick: () => act({ type: 'catch' }) }, `Catch ${player(st, st.catchable.pid).name}! (didn't say "${st.catchable.label}")`));
   }
   const tip = st.status !== 'playing' ? '' : st.pending ? '' : myTurn()
-    ? (lm ? `${lm.summary}${lm.legal.length ? ' Tap a highlighted card to play it.' : ''}` : 'Tap a card to play it, or draw from a pile; then end your turn.')
+    ? (sets && lm?.options ? (lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones, a highlighted opponent, or a face-up card to swap.` : `${lm.summary} Tap a card in your hand to use it, or draw.`)
+      : lm ? `${lm.summary}${lm.legal.length ? ' Tap a highlighted card to play it.' : ''}` : 'Tap a card to play it, or draw from a pile; then end your turn.')
     : 'Waiting for the other players…';
   const chips = [];
-  if (st.hand && st.dealer === p.seat) chips.push(h('span', { class: 'pv-chip' }, 'Dealer'));
+  if (st.hand && st.dealer === p.seat && !isSets(game)) chips.push(h('span', { class: 'pv-chip' }, 'Dealer'));
   if (isTricks(game) && st.hand) chips.push(h('span', { class: 'pv-chip' }, `Tricks ${st.hand.tricksWon[HUMAN] || 0}`));
+  if (sets && myTurn() && lm?.options) chips.push(h('span', { class: 'pv-chip gold' }, lm.discarding ? 'Discard' : `Actions left: ${lm.actionsLeft} of ${lm.actionsPerTurn}`));
+  if (sets && !st.revealed) {
+    const b = setsBreakdown(game, st, HUMAN);
+    if (b.hidden) chips.push(h('span', { class: 'pv-chip', title: 'Points in your face-down zones: only you know about them until the end' }, `+${b.hidden} hidden`));
+  }
   const manualScore = !(automation(game).autoScore && automation(game).scoring.length);
   return h('section', { class: `pv-me ${myTurn() ? 'turn' : ''}` },
     h('div', { class: 'pv-me-head' },
@@ -551,6 +659,7 @@ function myArea() {
         manualScore && !isAutomated(game) ? [h('button', { class: 'mini', onclick: () => act({ type: 'counter', player: HUMAN, counter: c.id, delta: -1 }) }, '−'), h('button', { class: 'mini', onclick: () => act({ type: 'counter', player: HUMAN, counter: c.id, delta: 1 }) }, '+')] : null)),
       chips,
       others.map((z) => h('span', { class: 'pv-chip', title: st.zones[z].name }, `${zoneDef(game, st.zones[z].defId).name}: ${st.zones[z].cards.length} card${st.zones[z].cards.length === 1 ? '' : 's'}`))),
+    sets ? mySets() : null,
     tip ? h('p', { class: 'pv-tip' }, tip) : null,
     actions.length ? h('div', { class: 'pv-actions' }, actions) : null,
     h('div', { class: `pv-hand ${cards.length > 9 ? 'many' : ''}` }, cards.map((u) => {
@@ -558,8 +667,9 @@ function myArea() {
       const el = cardFace(d);
       el.dataset.card = u;
       el.classList.add('pv-card');
+      if (sel === u) el.classList.add('picked');
       if (lm) {
-        if (lm.cards[u]) { el.classList.add('no'); el.title = lm.cards[u]; } else { el.classList.add('ok'); el.title = 'Tap to play'; }
+        if (lm.cards[u]) { el.classList.add('no'); el.title = lm.cards[u]; } else { el.classList.add('ok'); el.title = lm.discarding ? 'Tap to discard' : lm.options ? 'Tap to pick up' : 'Tap to play'; }
       } else if (myTurn()) {
         el.classList.add('ok');
       }
@@ -570,6 +680,10 @@ function myArea() {
 
 function sortHand(cards) {
   if (!isAutomated(game)) return cards;
+  if (isSets(game)) {
+    const order = game.cards.map((c) => c.id);
+    return cards.slice().sort((a, b) => order.indexOf(st.cards[a].defId) - order.indexOf(st.cards[b].defId));
+  }
   const A = automation(game);
   const shed = isShedding(game);
   const g = shed ? A.shedding.colourStat : A.tricks.suitStat;
@@ -621,6 +735,7 @@ function gameOver() {
     h('p', { class: 'big' }, iWon ? (winners.length > 1 ? `Well played - ${names.join(' & ')} win the game!` : 'Congratulations - you won the game!') : `${names.join(' & ') || 'Nobody'} won the game.`),
     st.result?.reason ? h('p', { class: 'muted small' }, st.result.reason.replace(/ \([^)]*[<>=][^)]*\)$/, '')) : null,
     standings(st.lastHand),
+    isSets(game) && st.lastHand?.scoreLines?.length ? h('ul', { class: 'score-why small' }, st.lastHand.scoreLines.map((t) => h('li', {}, t))) : null,
     h('p', { class: 'muted small' }, `${st.handsPlayed ? `${st.handsPlayed} ${isShedding(game) ? 'round' : 'hand'}${st.handsPlayed > 1 ? 's' : ''} · ` : ''}${st.turn.number} turns`)),
   [
     { label: 'Change options', onClick: () => { st = null; welcome(); } },

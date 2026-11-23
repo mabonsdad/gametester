@@ -3,8 +3,9 @@
 import { buildSystemPrompt } from '../ai.js';
 import { FORMULA_HELP, describeAutomation } from '../engine.js';
 import { check } from '../expr.js';
+import { parsePattern } from '../sets.js';
 import {
-  END_AT, ENFORCE, LAYOUTS, MISSED, SCORE_EVENTS, SCORE_WHO, SETUP_OPS, STACKING, STYLES, blankAnnouncement, blankVariant, formatSetLines,
+  END_AT, ENFORCE, LAYOUTS, MISSED, SCORE_EVENTS, SCORE_WHO, SETS_END, SETUP_OPS, STACKING, STYLES, blankAnnouncement, blankVariant, formatSetLines,
   getPath, parseSetLines, slug,
 } from '../model.js';
 import { field, h, modal } from '../ui.js';
@@ -183,6 +184,7 @@ export async function renderRules(root, ctx) {
     const A = project.automation;
     const T = A.tricks;
     const S = A.shedding;
+    const Z = A.sets;
     const wrap = h('div', {});
     const summary = h('ul', { class: 'auto-list' });
     const refreshSummary = () => summary.replaceChildren(...describeAutomation(project).map((l) => h('li', { class: l.startsWith('  ') ? 'sub' : '' }, l.trim())));
@@ -203,6 +205,52 @@ export async function renderRules(root, ctx) {
     const remove = (arr, i) => h('button', { class: 'icon-btn danger', title: 'Remove', onclick: () => { arr.splice(i, 1); changed(); redraw(); } }, '✕');
     const shared = Object.fromEntries(project.zones.filter((z) => z.scope === 'shared').map((z) => [z.id, z.name]));
     const perPlayer = { '': '(back to the pack)', ...Object.fromEntries(project.zones.filter((z) => z.scope === 'player' && z.id !== 'hand').map((z) => [z.id, z.name])) };
+
+    function setsEditor() {
+      const num = (obj, key, min, max) => h('input', { type: 'number', min, max, class: 'narrow', value: obj[key] ?? 0, oninput: (e) => { obj[key] = Number(e.target.value) || 0; changed(); } });
+      const playerZones = Object.fromEntries(project.zones.filter((z) => z.scope === 'player' && z.id !== 'hand').map((z) => [z.id, z.name]));
+      const patternCell = (cb) => {
+        const err = h('small', { class: 'formula-err' }, cb.pattern ? parsePattern(cb.pattern, project.cards).error : '');
+        return h('div', { class: 'formula' },
+          h('input', { type: 'text', class: 'mono', value: cb.pattern || '', placeholder: 'e.g. werewolf + villager', size: 26,
+            oninput: (e) => { cb.pattern = e.target.value; err.textContent = e.target.value.trim() ? parsePattern(e.target.value, project.cards).error : ''; changed(); } }), err);
+      };
+      const noValue = project.cards.filter((c) => c.stats?.[Z.valueStat] == null);
+      return h('fieldset', { class: 'image-set' }, h('legend', {}, 'Set collection'),
+        h('div', { class: 'grid-3' },
+          field('Draw pile', sel(Z, 'drawZone', shared)),
+          field('Face-up cards to swap with', sel(Z, 'marketZone', { '': '(none)', ...shared })),
+          field('Discard pile', sel(Z, 'discardZone', shared))),
+        h('div', { class: 'grid-3' },
+          field('Actions per turn', num(Z, 'actions', 1, 10)),
+          field('Hand limit at the end of a turn (0 = none)', num(Z, 'handLimit', 0, 50)),
+          field('Value = card stat', txt(Z, 'valueStat', { class: 'mono' }))),
+        h('div', { class: 'grid-3' },
+          field("Complete a trick in another player's", sel(Z, 'giveZone', { '': '(not allowed)', ...playerZones })),
+          field('…and take it to your', sel(Z, 'captureZone', playerZones)),
+          field('Score counter', sel(Z, 'counter', counters()))),
+        h('div', { class: 'grid-3' }, field('Game end', sel(Z, 'endWhenEmpty', SETS_END)), h('span'), h('span')),
+        h('span', { class: 'field-label' }, 'Scoring zones (per player)'),
+        h('table', { class: 'edit-table' },
+          h('thead', {}, h('tr', {}, ['Zone', 'Multiplier', 'Secret until the end', ''].map((t) => h('th', {}, t)))),
+          h('tbody', {}, Z.zones.map((zr, i) => h('tr', {},
+            h('td', {}, sel(zr, 'zone', playerZones)),
+            h('td', {}, num(zr, 'multiplier', 0, 10)),
+            h('td', {}, h('input', { type: 'checkbox', checked: !!zr.secret, onchange: (e) => { zr.secret = e.target.checked; changed(); } })),
+            h('td', {}, remove(Z.zones, i)))))),
+        h('button', { class: 'btn small', onclick: () => { Z.zones.push({ zone: Object.keys(playerZones)[0] || '', multiplier: 1, secret: false }); changed(); redraw(); } }, '+ Add scoring zone'),
+        h('span', { class: 'field-label' }, 'Tricks (sets that score)'),
+        h('p', { class: 'muted small' }, 'Write each trick as cards joined by "+": a number, then a card name (plural is fine), several names separated by "/", "tag:name", or "any". Add "distinct" for cards that must all be different. Examples: "5 villagers", "werewolf + villager", "seer + 3 any distinct", "defender + villager/seer/witch". A trick scores the sum of its cards\' values unless you give a formula using sum and count (e.g. "sum * 2"). The app always uses the best way to split a zone\'s cards into tricks.'),
+        h('table', { class: 'edit-table' },
+          h('thead', {}, h('tr', {}, ['Name', 'Cards', 'Points (blank = sum of values)', ''].map((t) => h('th', {}, t)))),
+          h('tbody', {}, Z.combos.map((cb, i) => h('tr', {},
+            h('td', {}, txt(cb, 'label', { size: 10 })),
+            h('td', {}, patternCell(cb)),
+            h('td', {}, formula(cb, 'points', 'e.g. sum * 2')),
+            h('td', {}, remove(Z.combos, i)))))),
+        h('button', { class: 'btn small', onclick: () => { Z.combos.push({ id: `combo${Date.now().toString(36)}`, label: 'New trick', pattern: '', points: '' }); changed(); redraw(); } }, '+ Add trick'),
+        noValue.length ? h('p', { class: 'warn-box small' }, `${noValue.length} card type(s) have no "${Z.valueStat}" stat (e.g. ${noValue.slice(0, 3).map((c) => c.name).join(', ')}); they count as 0.`) : null);
+    }
 
     function build() {
       const tricks = A.style === 'tricks';
@@ -245,6 +293,7 @@ export async function renderRules(root, ctx) {
             const missing = project.cards.filter((c) => c.stats?.[S.colourStat] == null || c.stats?.[S.valueStat] == null);
             return missing.length ? h('p', { class: 'warn-box small' }, `${missing.length} card type(s) have no "${S.colourStat}" or "${S.valueStat}" stat (e.g. ${missing.slice(0, 3).map((c) => c.name).join(', ')}).`) : null;
           })()) : null,
+        A.style === 'sets' ? setsEditor() : null,
 
         h('div', {},
           h('span', { class: 'field-label' }, 'Announcements'),

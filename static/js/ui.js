@@ -152,7 +152,7 @@ export function cardFace(def, { size, extraClass = '' } = {}) {
   const stats = Object.entries(def.stats || {});
   return h('div', { class: `card face ${extraClass}`, style, title: def.name },
     h('div', { class: 'card-title' }, def.name || 'Untitled'),
-    def.image ? h('div', { class: 'card-art', style: { backgroundImage: cssUrl(def.image) } }) : null,
+    def.image ? h('div', { class: 'card-art', style: { backgroundImage: cssUrl(def.image) } }) : def.icon ? h('div', { class: 'card-icon' }, def.icon) : null,
     def.description ? h('div', { class: 'card-sub' }, def.description) : null,
     def.rules ? h('div', { class: 'card-rules' }, def.rules) : null,
     stats.length ? h('div', { class: 'card-stats' }, stats.map(([k, v]) => h('span', {}, h('b', {}, v), ' ', k))) : null,

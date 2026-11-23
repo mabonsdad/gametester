@@ -20,11 +20,17 @@ with any mix of human and AI players.
     before or after a play; forgetting can be caught by other players or
     penalised automatically; every one made, missed or caught is counted and
     can be used in scoring;
+  * set collection: a few actions per turn (draw, swap with a face-up
+    market, play to your own zones, or complete and take another player's
+    trick), with tricks written as simple patterns such as
+    `alpha wolf + 2 werewolves` or `seer + 3 any distinct`; each zone scores
+    the best way of splitting its cards into tricks, with a multiplier per
+    zone, and face-down zones stay secret until the end;
   * legal-move checking (off / warn / strict), with legal cards highlighted;
   * scoring rules and end conditions written as simple formulas, e.g.
     `max(0, teamTricks - 6)` or `othersHandSum("points")`.
 
-  See the Whist and Switchback samples.
+  See the Whist, Switchback and werewolf_tricks samples.
 * **Pauses**: optionally stop after each trick and after each hand or round,
   so the result can be read; the game-over screen shows the final standings
   and has a "Play again" button.
@@ -113,6 +119,7 @@ tests/               backend tests
 static/              the app (vanilla JS modules, no build step)
   js/engine.js       table state, actions, log, seeded RNG
   js/ai.js           prompts, response parsing, AI controllers
+  js/sets.js         set-collection patterns and best-combination scoring
   js/turns.js        one AI turn with retries and fallbacks (shared)
   js/player.js       the player view (play.html)
   js/views/          projects, cards, rules, play
