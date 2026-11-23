@@ -6,8 +6,8 @@
 
 import * as api from './api.js';
 import {
-  activePlayer, announcementRules, announcementsDue, automation, cardDef, cardEffects, describeAutomation, isShedding, isTricks,
-  isVisibleTo, legalMoves, player, resolveZone, shedTop, teamOf,
+  activePlayer, announcementRules, announcementsDue, automation, cardDef, cardEffects, describeAutomation, isSets, isShedding, isTricks,
+  isVisibleTo, legalMoves, player, resolveZone, setsBotTurn, setsBreakdown, setsCfg, shedTop, teamOf,
 } from './engine.js';
 import { zoneDef } from './model.js';
 
@@ -48,14 +48,35 @@ export function buildSystemPrompt(project) {
   const A = automation(project);
   const tricks = isTricks(project);
   const shedding = isShedding(project);
-  const harness = shedding
+  const sets = isSets(project);
+  const S = sets ? setsCfg(project) : null;
+  const harness = sets
+    ? 'The harness runs the mechanics listed under "Automated by the harness": it checks that each action is legal, works out the best arrangement of every zone into tricks, keeps the score, passes the turn after your actions and ends the game. You only choose your actions.'
+    : shedding
     ? 'The harness runs the mechanics listed under "Automated by the harness": it checks that your move is legal, applies card effects, passes the turn, deals new rounds' + (A.autoScore ? ', keeps the score' : '') + ' and ends the game. You only choose what to play (or to draw).'
     : tricks
     ? 'The harness runs the mechanics listed under "Automated by the harness": it checks that your card is legal, passes the turn, decides who wins each trick, deals new hands' + (A.autoScore ? ', keeps the score' : '') + ' and ends the game. You only choose which card to play.'
     : A.autoScore && A.scoring.length
       ? 'The harness keeps the score using the rules under "Automated by the harness" - do not change those counters yourself. Apply all other rules yourself.'
       : 'The harness does NOT enforce rules. You must apply them yourself, including scoring by changing counters and ending the game when the rules say so.';
-  const respond = shedding
+  const respond = sets
+    ? `Reply with ONE JSON object and nothing else:
+{
+  "reasoning": "1-3 sentences: your plan for this turn",
+  "actions": [ up to ${S.actions} of these, in order:
+     {"type":"draw"}                                          draw from the ${S.drawZone}
+     {"type":"swap","card":"<your hand card id>","with":"<face-up card id in ${S.marketZone}>"}
+     {"type":"move","card":"<your hand card id>","to":"<one of your scoring zones, e.g. ${(S.zones || []).map((z) => z.zone).join(' or ')}>"}
+     {"type":"move","card":"<your hand card id>","to":"<another player's zone, e.g. p2.${S.giveZone}>"}   only when it completes a trick there (listed in the state)
+     {"type":"move","card":"<your hand card id>","to":"${S.discardZone}"}      only when you are told to discard
+     {"type":"endTurn"}                                       to stop before using all your actions
+  ],
+  "winConfidence": 0-100,   // honest estimate that you will win the game from here
+  "experience": "one sentence on how this turn felt from your seat (interesting choice? stuck? clever steal?)",
+  "designerNotes": "rule ambiguities or design problems you noticed, or empty string"
+}
+The turn passes automatically after your last action. If you draw a card you will be asked again for the rest of your turn (you will then see the card), so put a draw last in your list.`
+    : shedding
     ? `Reply with ONE JSON object and nothing else:
 {
   "reasoning": "1-3 sentences: why this move",
@@ -160,6 +181,32 @@ ${lm.summary}
 Legal cards: ${lm.legal.length ? lm.legal.map(nm).join(', ') : 'none'}
 Other options: ${[lm.canDraw ? (lm.takeCount ? `take the ${lm.takeCount} waiting card(s) and miss your turn ({"type":"draw"})` : 'draw a card ({"type":"draw"})') : '', lm.canPass ? 'pass ({"type":"endTurn"})' : ''].filter(Boolean).join('; ') || 'none'}
 ${wilds.length ? `For a wild card, add "choose" with one of: ${lm.colours.join(', ')}.\n` : ''}`;
+  } else if (isSets(project) && st.hand) {
+    const S = setsCfg(project);
+    const lm = legalMoves(project, st, pid);
+    const nmList = (uids) => uids.length ? uids.map(nm).join(', ') : 'none';
+    const zoneText = (pidZ, z, mineView) => {
+      const tricks = z.tricks.map((t) => `${t.label} [${t.cards.map((u) => u).join(' ')}] = ${t.points}`).join('; ') || 'no tricks';
+      return `${z.name} (×${z.multiplier}${z.secret ? ', face down' : ''}): ${tricks}; loose: ${nmList(z.loose)}${!z.secret && z.loose.length ? (mineView ? ' (at risk - others can complete tricks with these)' : ' (you may be able to complete a trick with these)') : ''} → ${z.points} points`;
+    };
+    const mine = setsBreakdown(project, st, pid);
+    const others = st.players.filter((o) => o.id !== pid).map((o) => {
+      const b = setsBreakdown(project, st, o.id);
+      return `${o.id} ${o.name}: ${b.zones.map((z) => (z.secret ? `${z.name}: ${st.zones[z.zid]?.cards.length ?? 0} card(s) face down` : zoneText(o.id, z, false))).join(' | ')}`;
+    }).join('\n');
+    const hits = (lm.options || []).filter((o) => o.gain > 0).map((o) => `- ${JSON.stringify(o.action)}: ${o.label.replace(/^Play/, `play ${nm(o.card)}`)}`);
+    const deck = st.zones[S.drawZone];
+    trickInfo = `
+Actions left this turn: ${lm.actionsLeft ?? 0} of ${S.actions}. ${deck?.name || 'Draw pile'}: ${deck?.cards.length ?? 0} card(s) left.${st.hand.lastSeat != null ? ` The draw pile is empty: the game ends after ${st.players[st.hand.lastSeat].name}'s turn.` : ''}
+${lm.summary}
+Your hand (${(st.zones[`${pid}.hand`]?.cards || []).length}, limit ${S.handLimit || 'none'}): ${nmList(st.zones[`${pid}.hand`]?.cards || [])}
+Face-up cards you can swap with (${st.zones[S.marketZone]?.name || S.marketZone}): ${nmList(st.zones[S.marketZone]?.cards || [])}
+Your tricks (the best arrangement, worked out by the harness):
+${mine.zones.map((z) => '- ' + zoneText(pid, z, true)).join('\n')}
+Your points: ${mine.public} showing${mine.hidden ? ` + ${mine.hidden} hidden in face-down zones` : ''} = ${mine.total}.
+Other players' tricks:
+${others}
+${hits.length ? `Moves that score straight away:\n${hits.join('\n')}\n` : 'No single move scores straight away.\n'}`;
   } else if (isTricks(project) && st.hand) {
     const H = st.hand;
     const lm = legalMoves(project, st, pid);
@@ -236,6 +283,9 @@ export function randomBot(project, st, pid) {
   const lm = legalMoves(project, st, pid);
   // Random bots say required announcements only 60% of the time, so penalties get exercised.
   const say = (card) => announcementsDue(project, st, pid, card).filter(() => Math.random() < 0.6);
+  if (lm && isSets(project)) {
+    return { reasoning: 'Quick bot: simple set-collection strategy.', actions: setsBotTurn(project, st, pid), winConfidence: null, experience: '', designerNotes: '' };
+  }
   if (lm && isShedding(project)) {
     const card = lm.legal[Math.floor(Math.random() * lm.legal.length)];
     const actions = card

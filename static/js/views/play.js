@@ -5,8 +5,8 @@ import { CONTROLLERS, isAI } from '../ai.js';
 import { rollAiCatch, takeAiTurn } from '../turns.js';
 import {
   activePlayer, apply, automation, cardDef, checkAction as ruleCheck, clone, competitorName, competitors, createGame,
-  announcementRules, announcementsDue, cardEffects, describeAutomation, isAutomated, isShedding, isTricks, leadStats, legalMoves,
-  player, shedColours, shedTop, teamOf,
+  announcementRules, announcementsDue, cardEffects, describeAutomation, isAutomated, isSets, isShedding, isTricks, leadStats, legalMoves,
+  player, setsBreakdown, setsCfg, shedColours, shedTop, teamOf, zoneTricks,
 } from '../engine.js';
 import { SUITS, uid, zoneDef } from '../model.js';
 import { cardBack, cardFace, confirmDialog, debounce, download, field, fmtTime, h, modal, toast } from '../ui.js';
@@ -104,7 +104,7 @@ export async function renderPlay(root, ctx, args) {
             h('button', { class: 'btn small', onclick: () => { seats.forEach((s) => { s.controller = 'human'; }); drawSeats(); } }, 'All human'),
             h('button', { class: 'btn small', onclick: () => { seats.forEach((s, i) => { s.controller = i === 0 ? 'human' : 'ai-random'; }); drawSeats(); } }, 'Me + random bots'),
             serverMode ? h('button', { class: 'btn small', onclick: () => { seats.forEach((s, i) => { s.controller = i === 0 ? 'human' : 'ai-bridge'; }); drawSeats(); } }, 'Me + Claude (chat)') : null),
-          isAutomated(project) ? h('div', { class: 'stack' },
+          isAutomated(project) && !isSets(project) ? h('div', { class: 'stack' },
             h('span', { class: 'field-label' }, 'Pauses'),
             isTricks(project) ? optBox('pauseTricks', 'Pause after each trick, so everyone can see who won it') : null,
             optBox('pauseHands', `Pause at the end of each ${isShedding(project) ? 'round' : 'hand'} to show the scores`)) : null,
@@ -371,7 +371,7 @@ export async function renderPlay(root, ctx, args) {
           st.players.map((p) => h('option', { value: p.id }, p.name))) : null,
         h('label', { class: 'inline', title: 'Put the viewing seat at the bottom of the screen' },
           h('input', { type: 'checkbox', checked: view.rotate, onchange: (e) => { view.rotate = e.target.checked; saveView(); render(); } }), ' Viewer at bottom'),
-        isAutomated(project) ? h('span', { class: 'inline small pause-opts', title: 'Pause points: the game waits for Next' }, 'Pause after: ',
+        isAutomated(project) && !isSets(project) ? h('span', { class: 'inline small pause-opts', title: 'Pause points: the game waits for Next' }, 'Pause after: ',
           isTricks(project) ? h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: !!st.options?.pauseTricks, onchange: (e) => { st.options.pauseTricks = e.target.checked; persist(); } }), ' tricks ') : null,
           h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: !!st.options?.pauseHands, onchange: (e) => { st.options.pauseHands = e.target.checked; persist(); } }), isShedding(project) ? ' rounds' : ' hands')) : null,
         h('label', { class: 'inline' }, 'Card size ',
@@ -456,11 +456,11 @@ export async function renderPlay(root, ctx, args) {
     const others = zones.filter((z) => z !== hand);
     const winner = st.result?.winners?.includes(p.id);
     const team = teamOf(st, p.id);
-    const auto = automation(project).autoScore && automation(project).scoring.length;
+    const auto = automation(project).autoScore && (automation(project).scoring.length || isSets(project));
     return h('div', { class: `seat side-${side} ${active ? 'active' : ''} ${winner ? 'winner' : ''}` },
       h('div', { class: 'seat-head' },
         h('span', { class: 'seat-name' }, active ? '▶ ' : '', p.name, winner ? ' 🏆' : ''),
-        st.hand && st.dealer === p.seat ? h('span', { class: 'dealer-chip', title: 'Dealer' }, 'Dealer') : null,
+        st.hand && st.dealer === p.seat && !isSets(project) ? h('span', { class: 'dealer-chip', title: 'Dealer' }, 'Dealer') : null,
         isShedding(project) && st.status === 'playing' && st.zones[`${p.id}.hand`]?.cards.length === 1 ? h('span', { class: 'lastcard-chip' }, 'Last card!') : null,
         st.announce?.pid === p.id ? h('span', { class: 'announce-chip', title: 'Announced this turn' }, `📣 ${st.announce.ids.map((id) => announcementRules(project).find((r) => r.id === id)?.label || id).join(', ')}`) : null,
         st.catchable?.pid === p.id ? h('span', { class: 'missed-chip', title: 'Forgot to announce - can be caught' }, `⚠ didn't say "${st.catchable.label}"`) : null,
@@ -490,6 +490,15 @@ export async function renderPlay(root, ctx, args) {
         el.classList.remove('drop');
         const card = e.dataTransfer.getData('text/card');
         const lm = legalNow();
+        if (card && lm?.options && st.cards[card]?.zone === `${lm.pid}.hand`) {
+          // Set collection: the drop target decides the action (a face-up card = swap).
+          const onto = e.target.closest?.('[data-card]')?.dataset.card;
+          const o = lm.options.find((x) => x.card === card && (x.kind === 'swap' ? x.with === onto : x.to === zid))
+            || lm.options.find((x) => x.card === card && x.kind === 'swap' && st.cards[x.with]?.zone === zid);
+          if (o) commit(o.action);
+          else commit({ type: 'move', card, to: zid }); // checked (and explained) like any move
+          return;
+        }
         if (card && isDrawTop(card, lm)) { if (zid !== st.cards[card].zone) commit({ type: 'draw' }); }
         else if (card && lm && zid === lm.target && st.cards[card]?.zone === `${lm.pid}.hand`) playCard(card);
         else if (card && st.cards[card]?.zone !== zid) commit({ type: 'move', card, to: zid });
@@ -522,12 +531,27 @@ export async function renderPlay(root, ctx, args) {
     } else {
       const cards = layout === 'hand' && automated ? sortHand(z.cards) : z.cards;
       el.append(head, h('div', { class: `cards ${layout === 'hand' && cards.length > 8 ? 'many' : ''}` }, cards.length ? cards.map((c) => cardEl(c)) : h('div', { class: 'empty-hint' }, 'empty')));
+      const sc = isSets(project) && st.hand && z.owner ? setsCfg(project).zones.find((x) => x.zone === z.defId) : null;
+      if (sc && z.cards.length && (!sc.secret || z.cards.every((c) => canSeeFace(c)))) {
+        const r = zoneTricks(project, st, zid);
+        const m = Number(sc.multiplier) || 1;
+        el.append(h('div', { class: 'set-summary small' },
+          r.tricks.length ? r.tricks.map((t) => `${t.label} ${t.points}`).join(' · ') : 'no tricks yet',
+          ` → ${r.total}${m !== 1 ? ` ×${m} = ${r.total * m}` : ''} pts`,
+          r.loose.length ? h('span', { class: 'muted' }, ` · ${r.loose.length} loose`) : null));
+      } else if (sc && z.cards.length) {
+        el.append(h('div', { class: 'set-summary small muted' }, 'face down - scored at the end'));
+      }
     }
     return el;
   }
 
   // Display order for automated games' hands: by suit/colour, then rank/value.
   function sortHand(cards) {
+    if (isSets(project)) {
+      const order = project.cards.map((c) => c.id);
+      return cards.slice().sort((a, b) => order.indexOf(st.cards[a].defId) - order.indexOf(st.cards[b].defId));
+    }
     const A = automation(project);
     const shed = isShedding(project);
     const groupStat = shed ? A.shedding.colourStat : A.tricks.suitStat;
@@ -552,6 +576,12 @@ export async function renderPlay(root, ctx, args) {
   function playCard(cuid) {
     const lm = legalNow();
     if (!lm) return;
+    if (lm.options) {
+      const opts = lm.options.filter((o) => o.card === cuid);
+      if (opts.length === 1) { commit(opts[0].action); return; }
+      selectCard(cuid);
+      return;
+    }
     const actor = activePlayer(st);
     if (isShedding(project) && cardEffects(project, st, cuid).wild && !lm.cards[cuid] && !isAI(actor.controller)) {
       // Ask which colour to follow.
@@ -579,7 +609,7 @@ export async function renderPlay(root, ctx, args) {
       const why = lm.cards[cuid];
       el.classList.add(why ? 'illegal' : 'legal');
       // Playing is the only thing you can do with a legal card, so a double-click plays it.
-      el.title = why || 'Legal play - double-click to play it (or select it and press Play)';
+      el.title = why || (lm.options ? (lm.discarding ? 'Double-click to discard it' : 'Select it to see what you can do with it, or drag it to a zone (onto a face-up card to swap)') : 'Legal play - double-click to play it (or select it and press Play)');
     }
     const drawTop = humanTurn && isDrawTop(cuid, lm);
     if (drawTop) {
@@ -621,8 +651,8 @@ export async function renderPlay(root, ctx, args) {
 
   // Is this the top card of a shedding game's draw pile, and may the active player draw now?
   function isDrawTop(cuid, lm = legalNow()) {
-    if (!isShedding(project) || !lm || lm.paused || !lm.canDraw) return false;
-    const deck = st.zones[project.automation.shedding.drawZone];
+    if (!(isShedding(project) || isSets(project)) || !lm || lm.paused || !lm.canDraw) return false;
+    const deck = st.zones[isSets(project) ? setsCfg(project).drawZone : project.automation.shedding.drawZone];
     return !!deck && deck.cards[deck.cards.length - 1] === cuid;
   }
 
@@ -661,7 +691,8 @@ export async function renderPlay(root, ctx, args) {
     const ai = isAI(p.controller);
     const tricks = isTricks(project) && st.hand;
     const shedding = isShedding(project) && st.hand;
-    const automated = tricks || shedding;
+    const sets = isSets(project) && st.hand;
+    const automated = tricks || shedding || sets;
     const lm = legalNow();
     const H = st.hand;
     const sym = (suit) => SUITS.find((x) => x.name === suit)?.symbol || '';
@@ -682,8 +713,15 @@ export async function renderPlay(root, ctx, args) {
         shedTop(project, st) ? h('span', { class: 'muted small' }, `Top: ${cname(shedTop(project, st))}`) : null,
         h('span', { class: 'muted small' }, st.dir === 1 ? 'Direction: ⟳ normal' : 'Direction: ⟲ reversed'),
         h('span', { class: 'muted small' }, `Draw pile: ${st.zones[project.automation.shedding.drawZone]?.cards.length ?? 0}`)) : null,
+      sets ? h('div', { class: 'trick-facts' },
+        h('span', {}, lm?.discarding ? 'Discarding' : `Actions left: ${lm?.actionsLeft ?? 0} of ${lm?.actionsPerTurn ?? setsCfg(project).actions}`),
+        h('span', { class: 'muted small' }, `${st.zones[setsCfg(project).drawZone]?.name}: ${st.zones[setsCfg(project).drawZone]?.cards.length ?? 0}`),
+        H.lastSeat != null ? h('span', { class: 'muted small' }, `Last turn: ${st.players[H.lastSeat].name}`) : null,
+        view.mode === 'overhead' ? h('span', { class: 'muted small', title: 'Points in face-down zones, scored at the end' }, `Hidden: ${st.players.map((x) => `${x.name} ${setsBreakdown(project, st, x.id).hidden}`).join(', ')}`) : null) : null,
       lm ? h('div', { class: 'you-can' }, h('b', {}, `${p.name}: `), lm.summary,
-        ai ? null : h('span', { class: 'muted small' }, ` Legal cards are outlined in green: double-click one, or select it and press Play (or Enter).${shedding && lm.canDraw ? ' Click the draw pile to draw.' : ''}`)) : null,
+        ai ? null : h('span', { class: 'muted small' }, sets
+          ? ' Select a card in the hand to see its options, or drag it: to a zone, onto a face-up card (swap) or into another player\'s zone (to complete and take a trick).'
+          : ` Legal cards are outlined in green: double-click one, or select it and press Play (or Enter).${shedding && lm.canDraw ? ' Click the draw pile to draw.' : ''}`)) : null,
       tricks && st.lastTrick ? h('div', { class: 'last-trick small' },
         `Last trick: ${player(st, st.lastTrick.winner).name} won with ${cname(st.lastTrick.winningCard)} - `,
         st.lastTrick.plays.map((t) => `${player(st, t.pid).name} ${cname(t.card)}`).join(', ')) : null,
@@ -694,6 +732,8 @@ export async function renderPlay(root, ctx, args) {
       h('div', { class: 'row gap wrap' },
         ai ? h('button', { class: 'btn primary', disabled: !!aiBusy, onclick: runAiTurn }, `▶ Play ${p.name}'s turn`) : null,
         phases.length > 1 && !automated ? h('button', { class: 'btn', disabled: !!aiBusy || st.turn.phase >= phases.length - 1, onclick: () => commit({ type: 'phase' }) }, 'Next phase') : null,
+        sets && !ai && lm?.canDraw && !lm.discarding ? h('button', { class: 'btn', onclick: () => commit({ type: 'draw' }) }, 'Draw a card') : null,
+        sets && !ai && !lm?.discarding ? h('button', { class: `btn ${lm?.actionsLeft ? '' : 'primary'}`, onclick: () => commit({ type: 'endTurn' }) }, lm?.actionsLeft ? 'End turn early' : 'End turn') : null,
         shedding && !ai && lm?.canDraw ? h('button', { class: `btn ${lm.legal.length ? '' : 'primary'}`, onclick: () => commit({ type: 'draw' }) }, lm.takeCount ? `Take ${lm.takeCount} cards` : 'Draw a card') : null,
         !ai && st.status === 'playing' ? announcementRules(project).map((r) => {
           const said = st.announce?.pid === p.id && st.announce.ids.includes(r.id);
@@ -744,7 +784,11 @@ export async function renderPlay(root, ctx, args) {
     const playable = lm && c.zone === `${lm.pid}.hand` && visible;
     const why = playable ? lm.cards[selected] : '';
     const strict = automation(project).enforce === 'strict';
-    const playBox = playable ? h('div', { class: 'play-box' },
+    const setOpts = playable && lm.options ? lm.options.filter((o) => o.card === selected) : null;
+    const playBox = setOpts ? h('div', { class: 'play-box stack' },
+      h('span', { class: 'field-label' }, `${lm.pid === activePlayer(st).id ? activePlayer(st).name : ''}: what to do with ${def.name}`),
+      setOpts.length ? setOpts.map((o) => h('button', { class: `btn small ${o.gain > 0 ? 'primary' : ''}`, onclick: () => commit(o.action) }, o.kind === 'swap' || o.kind === 'discard' ? o.label : o.kind === 'give' ? o.label : `${o.label.replace(/^Play/, `Play ${def.name}`)}`))
+        : h('p', { class: 'muted small' }, lm.cards[selected] || 'Nothing to do with this card now.')) : playable ? h('div', { class: 'play-box' },
       h('button', { class: 'btn primary', disabled: !!why && strict, onclick: () => playCard(selected) }, `Play ${def.name} ▶`),
       why ? h('p', { class: 'warn-box small' }, `Not allowed: ${why}`) : h('p', { class: 'muted small' }, 'This is a legal play.'),
       ...announcementsDue(project, st, lm.pid, selected).map((id) => announcementRules(project).find((r) => r.id === id))

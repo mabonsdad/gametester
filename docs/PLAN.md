@@ -195,6 +195,20 @@ insights (score chart, lead changes, AI feelings, notes).
     with standings and "Play again".
   * Stacking draw cards (off / same size / any).
   * Player view and share links for testing with real players.
+  * Set-collection style (`automation.sets`, `static/js/sets.js`) and the
+    werewolf_tricks sample:
+    * N actions per turn: draw, swap with a face-up market card, play to one
+      of your own scoring zones, or complete a trick with another player's
+      loose cards and take it; a hand limit with discards at the end of a turn.
+    * Tricks are patterns (`5 villagers`, `seer + 3 any distinct`,
+      `defender + villager/seer/witch` with points `sum * 2`).
+    * Each zone scores its best split into tricks (each card counts once) ×
+      the zone's multiplier. Secret zones are revealed and added at the end.
+    * The game ends when the draw pile runs out (after an equal number of
+      turns, or straight away).
+    * The quick bot plays a simple strategy: steal or finish a trick, start a
+      trick it can finish this turn face up, build face down, swap, draw.
+    * The card editor has an optional emoji icon for cards without an image.
   * Player options (`project.variants`): named choices that set project
     fields, picked on the player view's welcome screen.
   * Announcements: a general "say something around a play" mechanic.

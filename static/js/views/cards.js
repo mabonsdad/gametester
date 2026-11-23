@@ -87,6 +87,8 @@ export async function renderCards(root, ctx) {
               sharedZones.map((z) => h('option', { value: z.id }, z.name))))),
           h('div', { class: 'grid-2' },
             field('Card colour', h('input', { type: 'color', value: c.color || '#f4efe3', oninput: update((t) => { c.color = t.value; }) })),
+            field('Icon (an emoji, shown when there is no image)', h('input', { type: 'text', value: c.icon || '', maxlength: 8, placeholder: 'e.g. 🐺', oninput: update((t) => { c.icon = t.value.trim(); }) }))),
+          h('div', { class: 'grid-2' },
             field('Tags', h('input', { type: 'text', value: (c.tags || []).join(', '), placeholder: 'comma separated', oninput: update((t) => { c.tags = t.value.split(',').map((s) => s.trim()).filter(Boolean); }) }))),
           field('Stats (one per line, name: value)', h('textarea', {
             rows: 3, value: statsText, placeholder: 'cost: 3\npower: 2',

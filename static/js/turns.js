@@ -4,7 +4,8 @@
 // so the game never stalls.
 import { checkAction as aiCheck, isAI, parseResponse, requestTurn } from './ai.js';
 import {
-  activePlayer, announcementRules, apply, automation, cardDef, checkAction as ruleCheck, isShedding, isTricks, legalMoves,
+  activePlayer, announcementRules, apply, automation, cardDef, checkAction as ruleCheck, isSets, isShedding, isTricks, legalMoves,
+  setsBotTurn,
 } from './engine.js';
 
 export function numOrNull(v) {
@@ -23,8 +24,10 @@ export async function takeAiTurn(project, st, { ui = {}, onStatus = () => {}, be
   const turnAtStart = st.turn.number;
   const tricks = isTricks(project);
   const shedding = isShedding(project);
-  const automated = tricks || shedding;
-  const maxAsks = shedding ? 3 : tricks ? 2 : 1;
+  const sets = isSets(project);
+  const automated = tricks || shedding || sets;
+  // Set-collection turns come in parts: after a draw (or when a discard is due) the seat is asked again.
+  const maxAsks = sets ? (p.controller === 'ai-random' ? 10 : 4) : shedding ? 3 : tricks ? 2 : 1;
   const strict = automation(project).enforce === 'strict';
   const act = (a) => apply(project, st, { ...a, actor: a.actor || p.id });
   const myTurn = () => st.status === 'playing' && activePlayer(st).id === p.id && st.turn.number === turnAtStart;
@@ -40,6 +43,7 @@ export async function takeAiTurn(project, st, { ui = {}, onStatus = () => {}, be
     if (!changed) { beforeChange(); changed = true; }
     if (parsed.reasoning) act({ type: 'note', text: parsed.reasoning, private: true, kind: 'reasoning' });
     const rejected = [];
+    let drew = false;
     for (const raw of parsed.actions) {
       if (!myTurn()) break;
       if (!raw || typeof raw !== 'object') continue;
@@ -59,6 +63,20 @@ export async function takeAiTurn(project, st, { ui = {}, onStatus = () => {}, be
         act({ type: 'note', actor: 'system', text: `${p.name}'s action ${JSON.stringify(raw)} failed: ${e.message}` });
       }
       if (a.type === 'endGame') break;
+      if (a.type === 'draw') drew = true;
+      if (sets && drew && myTurn()) break; // the rest of the turn is chosen after seeing the card
+    }
+    if (sets && myTurn() && attempt < maxAsks - 1) {
+      const lm = legalMoves(project, st, p.id);
+      const again = rejected.length || lm.discarding || (drew && lm.actionsLeft > 0);
+      if (again) {
+        feedback = rejected.length ? rejected.join(' ')
+          : lm.discarding ? lm.summary
+            : `You drew ${cardDef(project, st, st.zones[`${p.id}.hand`].cards.at(-1))?.name} (${st.zones[`${p.id}.hand`].cards.at(-1)}). You have ${lm.actionsLeft} action(s) left.`;
+        onStatus(`${p.name} is thinking about the rest of their turn…`);
+        continue;
+      }
+      break;
     }
     if (automated && myTurn() && attempt < maxAsks - 1) {
       const drew = shedding && st.hand.drew && !rejected.length;
@@ -80,7 +98,18 @@ export async function takeAiTurn(project, st, { ui = {}, onStatus = () => {}, be
 // on its own when the AI could not be reached).
 export function finishTurn(project, st, p, myTurn = () => st.status === 'playing' && activePlayer(st).id === p.id, endRequested = false) {
   const act = (a) => apply(project, st, { ...a, actor: a.actor || p.id });
-  if (isShedding(project)) {
+  if (isSets(project)) {
+    for (let k = 0; k < 12 && myTurn(); k++) {
+      const lm = legalMoves(project, st, p.id);
+      if (lm.discarding) {
+        const a = setsBotTurn(project, st, p.id)[0];
+        act({ type: 'note', actor: 'system', text: `${p.name} must discard; the harness discards for them.` });
+        act(a || { type: 'move', card: st.zones[`${p.id}.hand`].cards[0], to: lm.options[0]?.action.to });
+      } else {
+        act({ type: 'endTurn' });
+      }
+    }
+  } else if (isShedding(project)) {
     if (myTurn() && legalMoves(project, st, p.id).canDraw) {
       act({ type: 'note', actor: 'system', text: `${p.name} did not make a legal move; the harness draws a card for them.` });
       act({ type: 'draw' });

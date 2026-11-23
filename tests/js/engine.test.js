@@ -362,3 +362,112 @@ test('announcements: say it in time, get caught, automatic penalty, tracked in s
   assert.equal(st.annStats[a].lastCard.missed, 3);
   assert.ok(describeAutomation(p).some((l) => l.includes('Announcement "Last card!"')));
 });
+
+// ------------------------------------------------------------------ set collection (werewolf_tricks)
+import { werewolfProject } from '../../static/js/model.js';
+import { setsBotTurn, setsBreakdown, zoneTricks } from '../../static/js/engine.js';
+import { bestTricks, compileSets, parsePattern } from '../../static/js/sets.js';
+
+test('set collection: patterns and the best split into tricks', () => {
+  const p = normalizeProject(werewolfProject());
+  const C = compileSets(p, p.automation.sets);
+  assert.deepEqual(C.errors, []);
+  const score = (names) => bestTricks(C, names.map((n) => p.cards.find((c) => c.name === n).id)).total;
+  assert.equal(score(Array(5).fill('Villager')), 5, 'Mob');
+  assert.equal(score(Array(4).fill('Villager')), 0, 'four villagers are not a trick');
+  assert.equal(score(['Seer', 'Witch', 'Villager', 'Werewolf']), 9, 'Vision: 3 different cards');
+  assert.equal(score(['Seer', 'Seer', 'Werewolf', 'Cupid']), 7, 'Vision with a second Seer');
+  assert.equal(score(['Seer', 'Villager', 'Villager', 'Werewolf']), 4, 'not 3 different: only a Hunt');
+  assert.equal(score(['Werewolf', 'Villager']), 4, 'Hunt');
+  assert.equal(score(['Witch', 'Villager', 'Werewolf']), 7, 'Potion');
+  assert.equal(score(['Alpha Wolf', 'Werewolf', 'Werewolf']), 10, 'Pack');
+  assert.equal(score(['Defender', 'Villager']), 2, 'Guard = 2 x the guarded card');
+  assert.equal(score(['Defender', 'Seer']), 4);
+  assert.equal(score(['Defender', 'Witch']), 6);
+  assert.equal(score(['Vampire', 'Villager', 'Villager', 'Villager']), 8, 'Feast');
+  assert.equal(score(['Cupid', 'Vampire', 'Vampire']), 10, 'Lovers score the two cards');
+  // Each card counts once, and the best arrangement wins: Feast + Hunt beats Mob.
+  assert.equal(score(['Vampire', 'Werewolf', ...Array(5).fill('Villager')]), 12);
+  assert.match(parsePattern('dragon + villager', p.cards).error, /No card is called "dragon"/);
+});
+
+test('set collection: actions, swaps, steals, hand limit and the end of the game', () => {
+  const p = normalizeProject(werewolfProject());
+  const st = createGame(p, { players: players4.slice(0, 3), seed: 5 });
+  const [a, b] = ['p1', 'p2'];
+  assert.equal(st.zones['p1.hand'].cards.length, 3);
+  assert.equal(st.zones.dayrow.cards.length, 4);
+  const card = (name, zone) => {
+    const u = Object.values(st.cards).find((c) => p.cards.find((d) => d.id === c.defId).name === name && c.zone !== `${a}.day` && c.zone !== `${b}.day` && c.zone !== zone).uid;
+    const from = st.zones[st.cards[u].zone].cards;
+    from.splice(from.indexOf(u), 1);
+    st.zones[zone].cards.push(u);
+    st.cards[u].zone = zone;
+    return u;
+  };
+  // B has a loose Werewolf in their Day tricks; A completes the Hunt with a Villager and takes it.
+  const wolf = card('Werewolf', `${b}.day`);
+  const vil = card('Villager', `${a}.hand`);
+  assert.equal(zoneTricks(p, st, `${b}.day`).loose.length, 1);
+  assert.ok(legalMoves(p, st, a).options.some((o) => o.kind === 'give' && o.card === vil && o.victim === b));
+  apply(p, st, { type: 'move', card: vil, to: `${b}.day`, actor: a });
+  assert.equal(st.cards[wolf].zone, `${a}.night`);
+  assert.equal(st.cards[vil].zone, `${a}.night`);
+  assert.equal(setsBreakdown(p, st, a).hidden, 4);
+  assert.equal(st.players[0].counters.score, 0, 'night points stay hidden until the end');
+  // A card that completes nothing cannot be put in someone else's zone.
+  const lone = card('Seer', `${a}.hand`);
+  assert.match(checkAction(p, st, { type: 'move', card: lone, to: `${b}.day`, actor: a }), /does not complete a trick/);
+  // Swap with a face-up Day card: it takes the card's place.
+  const market = st.zones.dayrow.cards[1];
+  apply(p, st, { type: 'swap', card: lone, with: market, actor: a });
+  assert.equal(st.zones.dayrow.cards[1], lone);
+  assert.equal(st.cards[market].zone, `${a}.hand`);
+  assert.equal(activePlayer(st).id, b, 'two actions used: the turn passes');
+  // Day tricks score double and count straight away; finished tricks are safe.
+  const w2 = card('Werewolf', `${b}.hand`);
+  const v2 = card('Villager', `${b}.hand`);
+  apply(p, st, { type: 'move', card: w2, to: 'day', actor: b });
+  apply(p, st, { type: 'move', card: v2, to: 'day', actor: b });
+  assert.equal(st.players[1].counters.score, 8);
+  const v3 = card('Villager', 'p3.hand');
+  assert.ok(!legalMoves(p, st, 'p3').options.some((o) => o.kind === 'give' && o.card === v3), 'a finished Hunt cannot be taken');
+  // Hand limit: discard down to 6 before the turn passes.
+  for (let i = 0; i < 6; i++) card('Villager', 'p3.hand');
+  apply(p, st, { type: 'draw', actor: 'p3' });
+  apply(p, st, { type: 'draw', actor: 'p3' });
+  assert.equal(activePlayer(st).id, 'p3');
+  assert.ok(legalMoves(p, st, 'p3').discarding);
+  assert.match(checkAction(p, st, { type: 'draw', actor: 'p3' }), /Discard/);
+  while (legalMoves(p, st, 'p3').discarding) apply(p, st, { type: 'move', card: st.zones['p3.hand'].cards[0], to: 'discard', actor: 'p3' });
+  assert.equal(st.zones['p3.hand'].cards.length, 6);
+  assert.equal(activePlayer(st).id, a);
+});
+
+test('set collection: whole bot games keep every card and end with equal turns', () => {
+  const p = normalizeProject(werewolfProject());
+  for (const n of [3, 4]) {
+    for (let seed = 1; seed <= 6; seed++) {
+      const st = createGame(p, { players: players4.slice(0, n), seed });
+      const turns = Object.fromEntries(st.players.map((x) => [x.id, 0]));
+      let guard = 0;
+      while (st.status === 'playing' && guard++ < 2000) {
+        const pid = activePlayer(st).id;
+        const turn = st.turn.number;
+        for (const a of setsBotTurn(p, st, pid)) {
+          assert.equal(checkAction(p, st, { ...a, actor: pid }), null, JSON.stringify(a));
+          apply(p, st, { ...a, actor: pid });
+          if (st.status !== 'playing' || activePlayer(st).id !== pid) break;
+        }
+        if (st.status === 'playing' && activePlayer(st).id === pid && st.turn.number === turn) continue;
+        turns[pid]++;
+      }
+      assert.equal(st.status, 'ended');
+      assert.equal(Object.values(st.zones).reduce((s, z) => s + z.cards.length, 0), 81);
+      assert.equal(st.zones.nightpile.cards.length, 0);
+      assert.equal(new Set(Object.values(turns)).size, 1, `equal turns: ${JSON.stringify(turns)}`);
+      for (const x of st.players) assert.equal(x.counters.score, setsBreakdown(p, st, x.id).total);
+      assert.ok(st.result.winners.length >= 1);
+    }
+  }
+});
