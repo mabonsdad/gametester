@@ -6,6 +6,7 @@ import { renderProjects } from './views/projects.js';
 import { renderCards } from './views/cards.js';
 import { renderRules } from './views/rules.js';
 import { renderPlay } from './views/play.js';
+import { showReloadBar, watchVersion } from './version.js';
 
 const root = document.getElementById('app');
 const header = document.getElementById('header');
@@ -124,3 +125,4 @@ window.addEventListener('gt-login-required', () => { if (api.needsLogin()) rende
 window.addEventListener('hashchange', route);
 await api.init();
 route();
+watchVersion(() => showReloadBar('A new version of the test bench has been published - reload to use it (your work is saved).'));

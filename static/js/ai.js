@@ -244,23 +244,58 @@ Decide your whole turn now and reply with the JSON object.`;
 
 export function buildPrompt(project, st, pid, feedback = '') {
   const user = buildUserPrompt(project, st, pid) + (feedback ? `\n\nIMPORTANT - your previous answer was rejected: ${feedback}\nChoose again, following the rules.` : '');
-  return { system: buildSystemPrompt(project), user };
+  // format 'turn': hosted models are asked to reply in the turn JSON format only.
+  return { system: buildSystemPrompt(project), user, format: 'turn' };
 }
 
 // --------------------------------------------------------------- parsing
+// Models sometimes wrap the JSON in prose, code fences or stray markup, or
+// send more than one object ("that was malformed, here it is again"). Use the
+// last complete object that has an "actions" list.
 export function parseResponse(text) {
-  let s = String(text || '').trim();
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) s = fence[1].trim();
-  let obj;
-  try { obj = JSON.parse(s); } catch {
-    const a = s.indexOf('{'); const b = s.lastIndexOf('}');
-    if (a < 0 || b <= a) throw new Error('No JSON object found in the AI response.');
-    obj = JSON.parse(s.slice(a, b + 1));
+  const s = String(text || '').trim();
+  const asTurn = (obj) => {
+    if (Array.isArray(obj)) return { actions: obj };
+    if (obj && Array.isArray(obj.actions)) return obj;
+    if (obj && typeof obj.type === 'string') return { actions: [obj] }; // a single bare action
+    return null;
+  };
+  try {
+    const whole = asTurn(JSON.parse(s));
+    if (whole) return whole;
+  } catch { /* look inside the text */ }
+  const found = [];
+  for (const chunk of jsonChunks(s)) {
+    try {
+      const t = asTurn(JSON.parse(chunk));
+      if (t) found.push(t);
+    } catch { /* not JSON after all */ }
   }
-  if (Array.isArray(obj)) obj = { actions: obj };
-  if (!Array.isArray(obj.actions)) throw new Error('AI response has no "actions" list.');
-  return obj;
+  const best = found.filter((t) => t.reasoning !== undefined || t.winConfidence !== undefined).pop() || found.pop();
+  if (!best) throw new Error(/[{[]/.test(s) ? 'The AI reply contained no complete turn (JSON with an "actions" list).' : 'No JSON object found in the AI response.');
+  return best;
+}
+
+// Top-level {...} and [...] spans in a text, skipping brackets inside strings.
+function jsonChunks(s) {
+  const out = [];
+  let depth = 0; let start = -1; let inStr = false; let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"' && depth > 0) inStr = true;
+    else if (ch === '{' || ch === '[') { if (depth === 0) start = i; depth++; }
+    else if ((ch === '}' || ch === ']') && depth > 0) {
+      depth--;
+      if (depth === 0) out.push(s.slice(start, i + 1));
+    }
+  }
+  return out;
 }
 
 // Reject moves of cards the seat could not legitimately touch.

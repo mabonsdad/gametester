@@ -126,7 +126,14 @@ function placeCard(project, st, uid, toZid, { faceUp, position } = {}) {
 }
 
 // ------------------------------------------------------------------ create
+const KNOWN_STYLES = ['free', 'tricks', 'shedding', 'sets'];
+
 export function createGame(project, { players, seed, options } = {}) {
+  const style = project.automation?.style;
+  if (style && !KNOWN_STYLES.includes(style)) {
+    // An open page running older code than the project needs: playing on would ignore the rules.
+    throw new Error(`This game uses rules ("${style}") that this copy of the app does not know yet. Reload the page to get the latest version.`);
+  }
   seed = Number.isFinite(seed) ? seed >>> 0 : Math.floor(Math.random() * 2 ** 31);
   const st = {
     v: 1,

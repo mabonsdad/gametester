@@ -211,6 +211,69 @@ except ImportError:
     HAVE_MOTO = False
 
 
+class ClaudeRequestTests(unittest.TestCase):
+    """The shape of the Claude request, with a stand-in for the anthropic SDK."""
+
+    def fake_sdk(self, reject_format=False):
+        import types
+        calls = []
+
+        class BadRequestError(Exception):
+            pass
+
+        class Block:
+            type = "text"
+            text = '{"reasoning":"","actions":[],"winConfidence":1,"experience":"","designerNotes":""}'
+
+        class Resp:
+            stop_reason = "end_turn"
+            content = [Block()]
+            model = "m"
+
+        def create(**kw):
+            calls.append(kw)
+            if reject_format and "format" in kw.get("output_config", {}):
+                raise BadRequestError("schema not supported")
+            return Resp()
+
+        msgs = types.SimpleNamespace(create=create)
+        client = types.SimpleNamespace(messages=msgs, beta=types.SimpleNamespace(messages=msgs))
+        mod = types.ModuleType("anthropic")
+        mod.Anthropic = lambda: client
+        mod.BadRequestError = BadRequestError
+        for name in ("AuthenticationError", "RateLimitError", "APIStatusError", "APIConnectionError"):
+            setattr(mod, name, type(name, (Exception,), {}))
+        return mod, calls
+
+    def run_with(self, mod, options):
+        from backend import ai
+        saved = sys.modules.get("anthropic")
+        sys.modules["anthropic"] = mod
+        try:
+            return ai.complete("anthropic", "sys", "user", options)
+        finally:
+            if saved is None:
+                sys.modules.pop("anthropic", None)
+            else:
+                sys.modules["anthropic"] = saved
+
+    def test_turn_format_requested(self):
+        mod, calls = self.fake_sdk()
+        self.run_with(mod, {"format": "turn"})
+        fmt = calls[0]["output_config"]["format"]
+        self.assertEqual(fmt["type"], "json_schema")
+        self.assertIn("actions", fmt["schema"]["properties"])
+        self.run_with(mod, {})
+        self.assertNotIn("format", calls[1]["output_config"])
+
+    def test_schema_rejected_falls_back(self):
+        mod, calls = self.fake_sdk(reject_format=True)
+        res = self.run_with(mod, {"format": "turn"})
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("format", calls[1]["output_config"])
+        self.assertIn("actions", res["text"])
+
+
 @unittest.skipUnless(HAVE_MOTO, "moto not installed")
 class S3StoreTests(unittest.TestCase):
     def test_s3_store(self):
