@@ -175,6 +175,91 @@ def job_cancel(req, jid):
     return json_response({"ok": True})
 
 
+# ------------------------------------------------------------------ share links (tester side)
+
+def shares_list(req, pid):
+    return json_response(storage.share_list(pid))
+
+
+def share_create(req, pid):
+    body = req.json()
+    return json_response(storage.share_create(pid, body.get("label"), body.get("providers"), body.get("dailyLimit", 300)))
+
+
+def share_revoke(req, pid, token):
+    return json_response(storage.share_revoke(pid, token))
+
+
+# ------------------------------------------------------------------ player view via a share link (no login)
+
+def _share_providers(rec):
+    st = ai.status()
+    ok = {"random": True, "anthropic": st["anthropic"]["sdkInstalled"] and st["anthropic"]["keySet"], "openai": st["openai"]["keySet"] and bool(st["openai"]["model"])}
+    return [p for p in rec.get("providers", ["random"]) if ok.get(p)]
+
+
+def play_project(req, token):
+    rec = storage.share_get(token)
+    project = storage.get_project(rec["projectId"])
+    return json_response({"project": project, "share": {"label": rec.get("label"), "providers": _share_providers(rec)}})
+
+
+def play_session_save(req, token, sid):
+    rec = storage.share_get(token)
+    if not sid.startswith("v_"):
+        raise storage.StorageError("Bad session id")
+    session = req.json()
+    try:
+        existing = storage.get_session(rec["projectId"], sid)
+    except storage.StorageError:
+        existing = None
+        storage.share_count_play(rec)
+    if existing and (existing.get("source") or {}).get("token") != token:
+        raise storage.StorageError("Not your session", 403)
+    session["id"] = sid
+    session["source"] = {**(session.get("source") or {}), "kind": "share", "token": token, "via": rec.get("label")}
+    return json_response(storage.save_session(rec["projectId"], session))
+
+
+def play_job_create(req, token):
+    rec = storage.share_get(token)
+    body = req.json()
+    provider = body.get("provider")
+    if provider not in jobs.HOSTED_PROVIDERS or provider not in _share_providers(rec):
+        raise storage.StorageError("That AI is not available for this link.", 403)
+    prompt = body.get("prompt") or {}
+    if not isinstance(prompt, dict) or not prompt.get("user"):
+        raise storage.StorageError("Missing prompt")
+    storage.share_count_ai_turn(rec)
+    job = storage.job_create(provider, prompt, {**(body.get("meta") or {}), "share": token})
+    jobs.start(job["id"])
+    return json_response(job_summary(job))
+
+
+def _share_job(token, jid):
+    storage.share_get(token)
+    job = storage.job_get(jid)
+    if (job.get("meta") or {}).get("share") != token:
+        raise storage.StorageError("Job not found", 404)
+    return job
+
+
+def play_job_get(req, token, jid):
+    return json_response(job_summary(_share_job(token, jid)))
+
+
+def play_job_cancel(req, token, jid):
+    _share_job(token, jid)
+    storage.job_update(jid, status="cancelled")
+    return json_response({"ok": True})
+
+
+def play_media(req, token, fname):
+    rec = storage.share_get(token)
+    data, ctype = storage.get_image(rec["projectId"], fname)
+    return Response(200, {"Content-Type": ctype, "Cache-Control": "private, max-age=86400"}, data)
+
+
 ID = r"([\w-]+)"
 ROUTES = [
     ("GET", r"/api/health", health, False),
@@ -197,6 +282,16 @@ ROUTES = [
     ("POST", rf"/api/ai/jobs/{ID}/answer", job_answer, True),
     ("DELETE", rf"/api/ai/jobs/{ID}", job_cancel, True),
     ("GET", rf"/media/{ID}/([\w.-]+)", media_get, True),
+    ("GET", rf"/api/projects/{ID}/shares", shares_list, True),
+    ("POST", rf"/api/projects/{ID}/shares", share_create, True),
+    ("DELETE", rf"/api/projects/{ID}/shares/{ID}", share_revoke, True),
+    # Share links: no login, the token is checked by each handler.
+    ("GET", rf"/api/play/{ID}", play_project, False),
+    ("PUT", rf"/api/play/{ID}/sessions/{ID}", play_session_save, False),
+    ("POST", rf"/api/play/{ID}/ai/jobs", play_job_create, False),
+    ("GET", rf"/api/play/{ID}/ai/jobs/{ID}", play_job_get, False),
+    ("DELETE", rf"/api/play/{ID}/ai/jobs/{ID}", play_job_cancel, False),
+    ("GET", rf"/api/play/{ID}/media/([\w.-]+)", play_media, False),
 ]
 
 

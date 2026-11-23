@@ -366,3 +366,8 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; }
 .table-card.drawable:hover { transform: translateY(-4px); }
 .play-toolbar select { max-width: 240px; }
 .play-toolbar label.inline { max-width: 100%; }
+
+/* ---------- player view links */
+.tabs a.player-link { margin-left: 6px; color: var(--accent); font-weight: 600; }
+.src-badge { margin-left: 6px; }
+.session-list li.revoked { opacity: .55; }

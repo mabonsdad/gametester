@@ -30,6 +30,21 @@ with any mix of human and AI players.
   and has a "Play again" button.
 * **Insights**: score chart, lead changes, each AI seat's win confidence and
   how its turn felt, plus your notes.
+* **Player view** (`play.html`): the selected game as a finished-looking
+  game for one human against AI opponents. It starts with the rulebook and
+  any choices (number of opponents, player options, which AI plays), then
+  keeps the focus on your hand and the table, shows each opponent's move,
+  pauses between tricks and hands, and ends with the scores. Open it from
+  the "Player view ↗" link in a project's header. Every game is saved as a
+  session, with timings, so it can be reviewed in Playtest.
+* **Share links**: on the Playtest page, "Share as a game" makes a link that
+  opens only that game's player view, with no password. Each link can be
+  switched off, and has a daily cap on AI turns if Claude or ChatGPT
+  opponents are allowed (quick bots cost nothing).
+* **Player options**: rule variations a player can pick before a game, such
+  as game length or a house rule. Each choice sets one or more project
+  fields (`automation.shedding.stackDraws = "any"`). They are edited under
+  Rules & setup.
 
 See [docs/PLAN.md](docs/PLAN.md) for the design, the data model, the
 playtesting research and the roadmap.
@@ -98,6 +113,8 @@ tests/               backend tests
 static/              the app (vanilla JS modules, no build step)
   js/engine.js       table state, actions, log, seeded RNG
   js/ai.js           prompts, response parsing, AI controllers
+  js/turns.js        one AI turn with retries and fallbacks (shared)
+  js/player.js       the player view (play.html)
   js/views/          projects, cards, rules, play
 docs/PLAN.md         design, research and roadmap
 ```

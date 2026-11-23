@@ -128,6 +128,7 @@ export function blankProject(name = 'Untitled game') {
       aiHints: '',
     },
     automation: defaultAutomation(),
+    variants: [], // player options: { id, label, description, default, choices: [{ label, set: { 'path.to.setting': value } }] }
     cards: [],
   };
 }
@@ -169,6 +170,7 @@ export function normalizeProject(p) {
   out.zones = Array.isArray(p.zones) && p.zones.length ? p.zones : base.zones;
   if (!out.zones.some((z) => z.id === 'hand')) out.zones.push(defaultZones()[3]);
   out.counters = Array.isArray(p.counters) ? p.counters : base.counters;
+  out.variants = Array.isArray(p.variants) ? p.variants : [];
   out.setup = Array.isArray(p.setup) ? p.setup : base.setup;
   out.cards = (p.cards || []).map((c) => ({ ...blankCard(out), ...c, stats: c.stats || {}, tags: c.tags || [] }));
   return out;
@@ -327,6 +329,16 @@ export function whistProject() {
     scoring: 'Each partnership scores 1 point for every trick it wins beyond six (the first six tricks are the "book"). Honours are not scored in this version.',
     aiHints: 'Track which cards have been played. Lead from long suits; avoid wasting high cards when your partner is already winning the trick.',
   };
+  p.variants = [
+    { id: 'length', label: 'Game length', description: 'Points a partnership needs to win.', default: 0, choices: [
+      { label: 'Short (5 points)', set: { 'automation.endWhen.0.expr': 'score >= 5', 'automation.endWhen.0.label': 'First partnership to 5 points' } },
+      { label: 'Long (7 points)', set: { 'automation.endWhen.0.expr': 'score >= 7', 'automation.endWhen.0.label': 'First partnership to 7 points' } },
+    ] },
+    { id: 'trumps', label: 'Trumps', description: 'How the trump suit is chosen each hand.', default: 0, choices: [
+      { label: 'Turn up the last card dealt', set: { 'automation.tricks.trump': 'lastDealt' } },
+      { label: 'No trumps', set: { 'automation.tricks.trump': 'none' } },
+    ] },
+  ];
   p.cards = standardDeck(p);
   return p;
 }
@@ -404,7 +416,72 @@ export function switchbackProject() {
     p.cards.push(card(`k_${k}_rev`, `${c} Switchback`, 'Reverse the direction of play', c, hex, 'reverse', 'reverse', 20, 2));
     p.cards.push(card(`k_${k}_d2`, `${c} +2`, 'Next player draws 2 and misses a turn', c, hex, '+2', 'draw:2', 20, 2));
   }
+  p.variants = [
+    { id: 'length', label: 'Game length', description: 'Points needed to win.', default: 1, choices: [
+      { label: 'Quick (100 points)', set: { 'automation.endWhen.0.expr': 'score >= 100', 'automation.endWhen.0.label': 'First to 100 points' } },
+      { label: 'Standard (150 points)', set: { 'automation.endWhen.0.expr': 'score >= 150', 'automation.endWhen.0.label': 'First to 150 points' } },
+      { label: 'Long (250 points)', set: { 'automation.endWhen.0.expr': 'score >= 250', 'automation.endWhen.0.label': 'First to 250 points' } },
+    ] },
+    { id: 'stacking', label: 'Stacking draw cards', description: 'Can a +2 or +4 be passed on with another draw card?', default: 0, choices: [
+      { label: 'Same card only (+2 on +2, +4 on +4)', set: { 'automation.shedding.stackDraws': 'same' } },
+      { label: 'Any draw card on any draw card', set: { 'automation.shedding.stackDraws': 'any' } },
+      { label: 'No stacking', set: { 'automation.shedding.stackDraws': 'off' } },
+    ] },
+    { id: 'lastcard', label: '"Last card!" rule', description: 'Must you announce your last card?', default: 0, choices: [
+      { label: 'Yes - +2 cards if you are caught', set: { 'automation.announcements.0.ifMissed': 'catch' } },
+      { label: 'No - the rule is off', set: { 'automation.announcements': [] } },
+    ] },
+  ];
   p.cards.push(card('k_prism', 'Prism', 'Wild: play on anything, choose the colour', 'Wild', '#2b2b33', 'wild', 'wild', 50, 4));
   p.cards.push(card('k_prism4', 'Prism +4', 'Wild: choose the colour; next player draws 4 and misses a turn', 'Wild', '#2b2b33', 'wild+4', 'wild draw:4', 50, 2));
   return p;
 }
+
+// ------------------------------------------------------------------ player options (variants)
+// A project can offer choices to players before a game, e.g. game length or a
+// house rule. Each choice sets project settings by path, so any setting can be
+// varied without code: 'automation.endWhen.0.expr': 'score >= 100'.
+
+export function blankVariant() {
+  return { id: uid('v'), label: 'New option', description: '', default: 0, choices: [{ label: 'Standard', set: {} }, { label: 'Alternative', set: {} }] };
+}
+
+function setPath(obj, path, value) {
+  const keys = String(path).split('.').filter(Boolean);
+  let o = obj;
+  for (const [i, k] of keys.entries()) {
+    const key = /^\d+$/.test(k) ? Number(k) : k;
+    if (i === keys.length - 1) { o[key] = value; return; }
+    if (o[key] == null || typeof o[key] !== 'object') o[key] = /^\d+$/.test(keys[i + 1]) ? [] : {};
+    o = o[key];
+  }
+}
+
+export function getPath(obj, path) {
+  return String(path).split('.').filter(Boolean).reduce((o, k) => (o == null ? undefined : o[/^\d+$/.test(k) ? Number(k) : k]), obj);
+}
+
+// The project with the chosen options applied. picks: { variantId: choiceIndex }
+export function applyVariants(project, picks = {}) {
+  const p = JSON.parse(JSON.stringify(project));
+  for (const v of project.variants || []) {
+    const idx = Number.isInteger(picks[v.id]) ? picks[v.id] : (v.default || 0);
+    const choice = v.choices?.[idx];
+    for (const [path, value] of Object.entries(choice?.set || {})) setPath(p, path, value);
+  }
+  return p;
+}
+
+// "path = value" lines <-> { path: value } (values parsed as JSON when possible).
+export function parseSetLines(text) {
+  const out = {};
+  for (const line of String(text || '').split('\n')) {
+    const m = line.match(/^\s*([\w.]+)\s*=\s*(.*?)\s*$/);
+    if (!m) continue;
+    let v = m[2];
+    try { v = JSON.parse(v); } catch { /* plain text */ }
+    out[m[1]] = v;
+  }
+  return out;
+}
+export const formatSetLines = (set) => Object.entries(set || {}).map(([k, v]) => `${k} = ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n');

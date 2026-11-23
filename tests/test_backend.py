@@ -153,6 +153,52 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(j["status"], "error")  # no SDK/key in the test environment
         self.assertTrue(j["error"])
 
+    def test_share_links(self):
+        self.login()
+        _, p, _ = self.call("POST", "/api/projects", {"name": "Shared game", "cards": []})
+        pid = p["id"]
+        png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+        _, img, _ = self.call("POST", f"/api/projects/{pid}/images", {"dataUrl": "data:image/png;base64," + png, "name": "a.png"})
+        status, share, _ = self.call("POST", f"/api/projects/{pid}/shares", {"label": "Friends", "providers": ["random", "anthropic"], "dailyLimit": 1})
+        self.assertEqual(status, 200)
+        tok = share["token"]
+        self.assertEqual(self.call("GET", f"/api/projects/{pid}/shares")[1][0]["token"], tok)
+        # Creating links needs the tester login
+        self.assertEqual(self.call("POST", f"/api/projects/{pid}/shares", {}, auth=False)[0], 401)
+        # The link works without logging in, for that project only
+        status, data, _ = self.call("GET", f"/api/play/{tok}", auth=False)
+        self.assertEqual((status, data["project"]["id"], data["share"]["label"]), (200, pid, "Friends"))
+        self.assertEqual(data["share"]["providers"], ["random"], "Claude is not configured in tests, so only quick bots")
+        self.assertEqual(self.call("GET", "/api/projects", auth=False)[0], 401)
+        self.assertEqual(self.call("GET", "/api/play/not-a-real-token-123", auth=False)[0], 404)
+        # Images through the link
+        fname = img["url"].split("/")[-1]
+        self.assertEqual(self.call("GET", f"/api/play/{tok}/media/{fname}", auth=False)[0], 200)
+        # Sessions: saved with the link as their source; ids must start v_; another link cannot overwrite
+        status, saved, _ = self.call("PUT", f"/api/play/{tok}/sessions/v_one", {"name": "P", "state": {}}, auth=False)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.call("PUT", f"/api/play/{tok}/sessions/s_x", {"state": {}}, auth=False)[0], 400)
+        got = self.call("GET", f"/api/projects/{pid}/sessions/v_one")[1]
+        self.assertEqual((got["source"]["kind"], got["source"]["via"]), ("share", "Friends"))
+        _, other, _ = self.call("POST", f"/api/projects/{pid}/shares", {"label": "Other"})
+        self.assertEqual(self.call("PUT", f"/api/play/{other['token']}/sessions/v_one", {"state": {}}, auth=False)[0], 403)
+        # AI jobs: only providers allowed and configured for the link
+        self.assertEqual(self.call("POST", f"/api/play/{tok}/ai/jobs", {"provider": "anthropic", "prompt": {"user": "u"}}, auth=False)[0], 403)
+        # Revoking stops the link
+        self.assertEqual(self.call("DELETE", f"/api/projects/{pid}/shares/{tok}")[0], 200)
+        self.assertEqual(self.call("GET", f"/api/play/{tok}", auth=False)[0], 404)
+
+    def test_share_ai_turn_limit(self):
+        self.login()
+        _, p, _ = self.call("POST", "/api/projects", {"name": "G", "cards": []})
+        storage = self.lf.app.storage
+        rec = storage.share_create(p["id"], "Cap", ["random"], daily_limit=2)
+        storage.share_count_ai_turn(rec)
+        storage.share_count_ai_turn(rec)
+        with self.assertRaises(storage.StorageError) as cm:
+            storage.share_count_ai_turn(rec)
+        self.assertEqual(cm.exception.status, 429)
+
     def test_unknown_routes(self):
         self.assertEqual(self.call("GET", "/api/nope")[0], 404)
         self.assertEqual(self.call("PATCH", "/api/projects")[0], 405)
