@@ -143,9 +143,14 @@ function prepare(C, defIds) {
 
 // The best split of a multiset of card types into combos.
 // -> { total, tricks: [{ id, label, defIds, points }], loose: [defIds] }
-export function bestTricks(C, defIds) {
-  const key = defIds.slice().sort().join(',');
+// mode 'points' (default): the split that scores the most.
+// mode 'cover': the split that leaves the fewest cards in no trick; if there
+// is a choice, the least valuable cards are left out; then the most points.
+export function bestTricks(C, defIds, mode = 'points') {
+  const key = mode + '|' + defIds.slice().sort().join(',');
   if (C.cache.has(key)) return C.cache.get(key);
+  // 'cover' ranks splits by (cards used, value of the cards used, points) in one number.
+  const weight = (ids, pts) => (mode === 'cover' ? ids.length * 1e8 + ids.reduce((s, d) => s + (C.wild.has(d) ? 0 : C.values[d] || 0), 0) * 1e4 + pts : pts);
   const { types, counts, combos } = prepare(C, defIds);
   const memo = new Map();
   const best = (c) => {
@@ -159,9 +164,10 @@ export function bestTricks(C, defIds) {
       c[t0]++;
       for (const x of combos) {
         forEachFill(x.slots, c, t0, (chosen) => {
-          const pts = C.pointsOf(x.cb, chosen.map((i) => types[i]));
+          const ids = chosen.map((i) => types[i]);
+          const pts = C.pointsOf(x.cb, ids);
           if (pts <= 0) return;
-          const v = pts + best(c).v;
+          const v = weight(ids, pts) + best(c).v;
           if (v > res.v) res = { v, pick: { cb: x.cb, chosen: chosen.slice(), pts }, skip: -1 };
         });
       }
@@ -170,7 +176,7 @@ export function bestTricks(C, defIds) {
     return res;
   };
   const c = counts.slice();
-  const total = best(c).v;
+  best(c);
   const tricks = [];
   const loose = [];
   for (let guard = 0; guard < 500; guard++) {
@@ -184,7 +190,7 @@ export function bestTricks(C, defIds) {
       loose.push(types[r.skip]);
     }
   }
-  const out = { total, tricks, loose };
+  const out = { total: tricks.reduce((s, t) => s + t.points, 0), tricks, loose };
   if (C.cache.size > 5000) C.cache.clear();
   C.cache.set(key, out);
   return out;
@@ -232,6 +238,30 @@ export function matchGroup(C, defIds) {
       const ids = chosen.map((i) => types[i]);
       const pts = C.pointsOf(x.cb, ids);
       if (pts > 0 && (!best || pts > best.points)) best = { id: x.cb.id, label: x.cb.label, defIds: ids, points: pts };
+    });
+  }
+  return best;
+}
+
+// The most valuable single combo that uses ALL of `extras` together with some
+// of `pool` (cards put into another player's zone to complete a trick there).
+// -> { id, label, defIds, points } or null
+export function bestTrickUsing(C, pool, extras) {
+  if (!extras.length) return null;
+  const all = [...pool, ...extras];
+  const { types, idx, counts, combos } = prepare(C, all);
+  const need = {};
+  for (const d of extras) need[d] = (need[d] || 0) + 1;
+  const must = idx.get(extras[0]);
+  let best = null;
+  for (const x of combos) {
+    forEachFill(x.slots, counts, must, (chosen) => {
+      const defIds = chosen.map((i) => types[i]);
+      const have = {};
+      for (const d of defIds) have[d] = (have[d] || 0) + 1;
+      if (Object.entries(need).some(([d, n]) => (have[d] || 0) < n)) return;
+      const pts = C.pointsOf(x.cb, defIds);
+      if (pts > 0 && (!best || pts > best.points)) best = { id: x.cb.id, label: x.cb.label, defIds, points: pts };
     });
   }
   return best;

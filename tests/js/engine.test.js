@@ -395,6 +395,7 @@ test('set collection: patterns and the best split into tricks', () => {
 
 test('set collection: actions, swaps, steals, hand limit and the end of the game', () => {
   const p = normalizeProject(werewolfProject());
+  p.automation.sets.arrange = 'manual';
   const st = createGame(p, { players: players4.slice(0, 3), seed: 5 });
   const [a, b] = ['p1', 'p2'];
   assert.equal(st.zones['p1.hand'].cards.length, 3);
@@ -477,6 +478,7 @@ test('set collection: whole bot games keep every card and end with equal turns',
 
 test('set collection: stacking protects a trick and fixes how it scores', () => {
   const p = normalizeProject(werewolfProject());
+  p.automation.sets.arrange = 'manual';
   const st = createGame(p, { players: players4.slice(0, 3), seed: 9 });
   const put = (name, zone) => {
     const u = Object.values(st.cards).find((c) => p.cards.find((d) => d.id === c.defId).name === name && !c.zone.includes('.day') && c.zone !== zone && !c.zone.includes('.hand')).uid;
@@ -515,4 +517,46 @@ test('set collection: stacking protects a trick and fixes how it scores', () => 
   put('Cupid', 'p2.day');
   put('Vampire', 'p2.day');
   assert.equal(zoneTricks(p, st, 'p2.day').total, 6, 'the Cupid has only the Vampire: no Lovers');
+});
+
+test('set collection: Day tricks group themselves; steals can use several cards', () => {
+  const p = normalizeProject(werewolfProject());
+  assert.equal(p.automation.sets.arrange, 'auto');
+  const st = createGame(p, { players: players4.slice(0, 3), seed: 21 });
+  const put = (name, zone) => {
+    const u = Object.values(st.cards).find((c) => p.cards.find((d) => d.id === c.defId).name === name && c.zone === 'nightpile').uid;
+    const from = st.zones.nightpile.cards;
+    from.splice(from.indexOf(u), 1);
+    st.zones[zone].cards.push(u);
+    st.cards[u].zone = zone;
+    return u;
+  };
+  // A Hunt, then a Seer and a Witch: they regroup into a Vision (no lone cards).
+  put('Werewolf', 'p2.day'); put('Villager', 'p2.day');
+  assert.deepEqual(zoneTricks(p, st, 'p2.day').tricks.map((t) => t.label), ['Hunt']);
+  put('Seer', 'p2.day'); put('Witch', 'p2.day');
+  let t = zoneTricks(p, st, 'p2.day');
+  assert.deepEqual(t.tricks.map((x) => x.label), ['Vision']);
+  assert.equal(t.lone.length, 0);
+  // Fewest lone cards, and the least valuable left alone: Werewolf + 2 Villagers -> Hunt, lone Villager.
+  put('Werewolf', 'p3.day'); put('Villager', 'p3.day'); put('Villager', 'p3.day');
+  t = zoneTricks(p, st, 'p3.day');
+  assert.equal(t.lone.length, 1);
+  assert.equal(st.cards[t.lone[0]].defId, 'villager');
+  // p1 holds two Villagers; p3 now has a Vampire and the lone Villager: two cards complete a Feast.
+  const vamp = put('Vampire', 'p3.day');
+  t = zoneTricks(p, st, 'p3.day');
+  assert.equal(t.lone.length, 2, 'Vampire + lone Villager');
+  const a = put('Villager', 'p1.hand');
+  const b = put('Villager', 'p1.hand');
+  const lm = legalMoves(p, st, 'p1');
+  const steal = lm.options.find((o) => o.kind === 'steal' && o.victim === 'p3');
+  assert.ok(steal, 'a two-card steal is offered');
+  assert.deepEqual(steal.cards.map((u) => st.cards[u].defId), ['villager', 'villager']);
+  assert.ok(a && b);
+  apply(p, st, { ...steal.action, actor: 'p1' });
+  assert.equal(st.cards[vamp].zone, 'p1.night');
+  assert.equal(st.zones['p1.night'].cards.length, 4, 'Vampire + 3 Villagers taken');
+  assert.equal(activePlayer(st).id, 'p2', 'two cards = two actions: the turn passed');
+  assert.match(checkAction(p, st, { type: 'steal', cards: [put('Seer', 'p2.hand')], to: 'p3.day', actor: 'p2' }), /do not complete a trick/);
 });

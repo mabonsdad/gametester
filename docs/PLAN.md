@@ -215,6 +215,12 @@ insights (score chart, lead changes, AI feelings, notes).
       players; unstacked cards still score in their best arrangement but can
       be completed and taken. Wild values ("same") take the value of the best
       other card in the trick.
+    * `sets.arrange: 'auto'` (werewolf_tricks' default): face-up zones group
+      themselves for the fewest lone cards (then the least valuable lone
+      cards, then points); every trick is safe.
+    * A `steal` action puts several hand cards into another player's zone to
+      complete a trick with their lone cards (one action per card); the player
+      view shows each possible steal as a button on that player's panel.
   * Player options (`project.variants`): named choices that set project
     fields, picked on the player view's welcome screen.
   * Announcements: a general "say something around a play" mechanic.
