@@ -155,7 +155,7 @@ export function cardFace(def, { size, extraClass = '' } = {}) {
     def.image ? h('div', { class: 'card-art', style: { backgroundImage: cssUrl(def.image) } }) : def.icon ? h('div', { class: 'card-icon' }, def.icon) : null,
     def.description ? h('div', { class: 'card-sub' }, def.description) : null,
     def.rules ? h('div', { class: 'card-rules' }, def.rules) : null,
-    stats.length ? h('div', { class: 'card-stats' }, stats.map(([k, v]) => h('span', {}, h('b', {}, v), ' ', k))) : null,
+    stats.length ? h('div', { class: 'card-stats' }, stats.map(([k, v]) => h('span', {}, h('b', { title: /^(same|wild|copy|match)$/i.test(String(v)) ? 'wild: worth the best card it is with' : null }, /^(same|wild|copy|match)$/i.test(String(v)) ? '★' : v), ' ', k))) : null,
   );
 }
 

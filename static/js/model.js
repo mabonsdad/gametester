@@ -152,6 +152,7 @@ export function blankProject(name = 'Untitled game') {
       aiHints: '',
     },
     automation: defaultAutomation(),
+    theme: '', // the player view's look (see themes.js)
     variants: [], // player options: { id, label, description, default, choices: [{ label, set: { 'path.to.setting': value } }] }
     cards: [],
   };
@@ -470,6 +471,7 @@ export function switchbackProject() {
 // safe and secret).
 export function werewolfProject() {
   const p = blankProject('werewolf_tricks');
+  p.theme = 'werewolf';
   p.description = 'Collect village and werewolf cards and lay them as tricks: face up by Day for double points (but others can finish and steal them), or face down by Night, safe and secret. Two actions a turn; most points when the Night pile runs out wins.';
   p.players = { min: 3, max: 4, default: 4 };
   p.cardBack = { color: '#1f2540', image: null, label: 'NIGHT' };

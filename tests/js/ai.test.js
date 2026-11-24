@@ -54,3 +54,10 @@ test('an open page with older code refuses a game style it does not know', () =>
   p.automation.style = 'from-the-future';
   assert.throws(() => createGame(p, { players: [{ name: 'A' }, { name: 'B' }, { name: 'C' }] }), /Reload the page/);
 });
+
+test('themes: werewolf_tricks uses the werewolf look; unknown themes fall back to classic', async () => {
+  const { themeOf } = await import('../../static/js/themes.js');
+  assert.equal(themeOf(normalizeProject(werewolfProject())).id, 'werewolf');
+  assert.equal(themeOf({ theme: 'no-such-theme' }).id, '');
+  assert.ok(themeOf(normalizeProject(werewolfProject())).opponents.length >= 5, 'enough opponents for 6 players');
+});

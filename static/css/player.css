@@ -194,3 +194,31 @@ html.pv-html { background: #143f30; }
 .pv-sets:not(.compact) .pv-tg.stacked .pv-tg-cards > .card + .card { margin-left: calc(var(--cw) * -.62); }
 .pv-tg.open { border: 1px dashed #ff9d9d; }
 .pv-stack-btn { padding: 1px 8px; font-size: 12px; }
+
+/* ---------- cheat sheet (set collection) */
+.pv-tagline { margin: 6px 0 0; font-style: italic; }
+.pv-cheat { position: fixed; right: 16px; bottom: 16px; z-index: 60; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 90px); overflow: auto;
+  background: var(--pv-panel); color: #1f2328; border-radius: 14px; box-shadow: 0 18px 50px rgba(0,0,0,.45); padding: 12px 14px; animation: pv-in .2s ease-out; }
+.pv-cheat-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 15px; }
+.pv-cheat-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pv-cheat-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #6b6f76; padding: 4px 6px; border-bottom: 1px solid #ddd6c8; }
+.pv-cheat-table td { padding: 5px 6px; border-bottom: 1px solid #eee7da; vertical-align: middle; }
+.pv-cheat-table .num { text-align: right; white-space: nowrap; font-weight: 700; }
+.pv-cs-name { font-weight: 700; white-space: nowrap; }
+.pv-cs-cards { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.pv-cs-slot { display: inline-flex; align-items: center; gap: 2px; }
+.pv-cs-alt { display: inline-flex; align-items: center; gap: 2px; }
+.pv-cs-or { font-size: 10px; color: #6b6f76; }
+.pv-cs-plus { color: #6b6f76; font-weight: 700; padding: 0 1px; }
+.pv-cs-x { font-size: 11px; color: #4a4f57; font-weight: 600; }
+.pv-chipcard.any { background: #e8e2d4; color: #6b6f76; }
+.pv-cs-values { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: 8px; font-size: 12px; }
+.pv-cs-value { display: inline-flex; align-items: center; gap: 3px; }
+.pv-cs-notes { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #3d4148; }
+@media (max-width: 900px) {
+  .pv-cheat { left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 70vh; padding: 10px; }
+  .pv-cheat-table { font-size: 12px; }
+  .pv-cheat-table th, .pv-cheat-table td { padding: 4px 3px; }
+  .pv-cheat-table th.num { white-space: normal; }
+  .pv-cs-name { white-space: normal; }
+}
