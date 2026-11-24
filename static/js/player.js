@@ -218,8 +218,9 @@ function catchUp(from, quiet = false) {
     const text = e.actor === HUMAN ? e.text : e.publicText; // your own moves in full
     const kind = ['trick', 'hand', 'endGame', 'trump', 'score', 'steal'].includes(e.type) ? 'big' : ['penalty', 'announce', 'final'].includes(e.type) ? 'alert' : e.actor === HUMAN ? 'me' : 'play';
     pushFeed({ text, kind, actor: e.actor });
-    if (player(st, e.actor) && ['play', 'draw', 'pass', 'announce', 'move', 'endTurn', 'swap', 'steal', 'give', 'discard'].includes(e.type)) bubbles[e.actor] = text.replace(new RegExp(`^${escapeRe(player(st, e.actor).name)}:?\\s*`), '');
-    if (!quiet && e.type === 'steal' && e.actor === HUMAN) toast(`🎉 You completed ${player(st, e.data.victim).name}'s ${e.data.combo} and took it!${e.data.gain ? ` +${e.data.gain}` : ''}`, 'win', 3500);
+    if (player(st, e.actor) && ['play', 'draw', 'pass', 'announce', 'move', 'endTurn', 'swap', 'steal', 'give', 'discard', 'stack'].includes(e.type)) bubbles[e.actor] = text.replace(new RegExp(`^${escapeRe(player(st, e.actor).name)}:?\\s*`), '');
+    if (!quiet && e.type === 'stack' && e.actor === HUMAN) toast(`🔒 ${e.data.combo} stacked - nobody can take it now.`, 'info', 2500);
+    else if (!quiet && e.type === 'steal' && e.actor === HUMAN) toast(`🎉 You completed ${player(st, e.data.victim).name}'s ${e.data.combo} and took it!${e.data.gain ? ` +${e.data.gain}` : ''}`, 'win', 3500);
     else if (!quiet && e.type === 'steal' && e.data?.victim === HUMAN) toast(`😱 ${player(st, e.actor).name} completed your ${e.data.combo} and took it!`, 'warn', 4000);
     else if (!quiet && e.type === 'play' && e.actor === HUMAN && e.data?.gain > 0) toast(e.data.combo ? `🎉 ${e.data.combo} complete! +${e.data.gain}` : `🎉 Your tricks improved: +${e.data.gain}`, 'win', 3000);
     else if (!quiet && e.type === 'final') toast(e.text, 'info', 4500);
@@ -465,11 +466,21 @@ function trickGroups(zid, { compact = false } = {}) {
     if (!st.cards[u].faceUp && own) el.classList.add('pv-facedown');
     return el;
   };
+  // Stacking applies to face-up zones that allow it; secret zones are always safe.
+  const canStackHere = !cfg?.secret && (r.stacks.length > 0 || (setsCfg(game).stackZones || [setsCfg(game).giveZone]).includes(z.defId));
+  const stackOpts = own && myTurn() ? (legalMoves(game, st, HUMAN)?.options || []).filter((o) => o.kind === 'stack' && o.zone === zid) : [];
+  const pts = (t) => `${t.points}${m !== 1 ? ` ×${m} = ${t.points * m}` : ''}`;
   return h('div', { class: `pv-sets ${compact ? 'compact' : ''}` },
-    r.tricks.map((t) => h('div', { class: 'pv-tg' }, h('div', { class: 'pv-tg-cards' }, t.cards.map(card)),
-      h('div', { class: 'pv-tg-label' }, `${t.label} ${t.points}${m !== 1 ? ` ×${m} = ${t.points * m}` : ''}`))),
+    r.tricks.map((t) => {
+      const o = stackOpts.find((x) => x.cards.length === t.cards.length && x.cards.every((u) => t.cards.includes(u)));
+      const open = !t.stacked && canStackHere;
+      return h('div', { class: `pv-tg ${t.stacked ? 'stacked' : ''} ${open ? 'open' : ''}`, title: t.stacked ? 'Stacked: safe, and it always scores as this trick' : open ? 'Not stacked: other players can use these cards' : '' },
+        h('div', { class: 'pv-tg-cards' }, t.cards.map(card)),
+        h('div', { class: 'pv-tg-label' }, `${t.stacked ? '🔒 ' : ''}${t.label} ${pts(t)}${open && !o ? ' · not stacked' : ''}`),
+        o ? h('button', { class: 'btn small pv-stack-btn', onclick: (e) => { e.stopPropagation(); act(o.action); }, title: o.label }, '🔒 Stack') : null);
+    }),
     r.loose.length ? h('div', { class: `pv-tg loose ${cfg?.secret ? '' : 'risk'}` }, h('div', { class: 'pv-tg-cards' }, r.loose.map(card)),
-      h('div', { class: 'pv-tg-label' }, cfg?.secret ? 'not in a trick yet' : own ? 'loose - others can complete these' : 'loose')) : null,
+      h('div', { class: 'pv-tg-label' }, cfg?.secret ? 'not in a trick yet' : own ? 'lone - others can use these' : 'lone')) : null,
     !z.cards.length ? h('div', { class: 'pv-empty' }, compact ? '-' : 'empty') : null);
 }
 
@@ -640,7 +651,7 @@ function myArea() {
     actions.unshift(h('button', { class: 'btn catch-btn pv-catch', onclick: () => act({ type: 'catch' }) }, `Catch ${player(st, st.catchable.pid).name}! (didn't say "${st.catchable.label}")`));
   }
   const tip = st.status !== 'playing' ? '' : st.pending ? '' : myTurn()
-    ? (sets && lm?.options ? (lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones, a highlighted opponent, or a face-up card to swap.` : `${lm.summary} Tap a card in your hand to use it, or draw.`)
+    ? (sets && lm?.options ? (lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones, a highlighted opponent, or a face-up card to swap.` : `${lm.summary} Tap a card in your hand to use it, or draw.${lm.canStack ? ' You have an unstacked trick: tap 🔒 Stack to protect it (free).' : ''}`)
       : lm ? `${lm.summary}${lm.legal.length ? ' Tap a highlighted card to play it.' : ''}` : 'Tap a card to play it, or draw from a pile; then end your turn.')
     : 'Waiting for the other players…';
   const chips = [];

@@ -535,10 +535,15 @@ export async function renderPlay(root, ctx, args) {
       if (sc && z.cards.length && (!sc.secret || z.cards.every((c) => canSeeFace(c)))) {
         const r = zoneTricks(project, st, zid);
         const m = Number(sc.multiplier) || 1;
+        const lm = legalNow();
+        const stackOpts = lm?.options && !isAI(activePlayer(st).controller) ? lm.options.filter((o) => o.kind === 'stack' && o.zone === zid) : [];
+        const openTricks = !sc.secret && r.tricks.some((t) => !t.stacked);
         el.append(h('div', { class: 'set-summary small' },
-          r.tricks.length ? r.tricks.map((t) => `${t.label} ${t.points}`).join(' · ') : 'no tricks yet',
+          r.tricks.length ? r.tricks.map((t) => `${t.stacked ? '🔒' : ''}${t.label} ${t.points}`).join(' · ') : 'no tricks yet',
           ` → ${r.total}${m !== 1 ? ` ×${m} = ${r.total * m}` : ''} pts`,
-          r.loose.length ? h('span', { class: 'muted' }, ` · ${r.loose.length} loose`) : null));
+          r.loose.length ? h('span', { class: 'muted' }, ` · ${r.loose.length} lone`) : null,
+          openTricks && r.stacks.length + r.tricks.length ? h('span', { class: 'muted' }, ' · unstacked tricks can be taken') : null,
+          stackOpts.map((o) => h('button', { class: 'mini stack-btn', title: o.label, onclick: () => commit(o.action) }, `🔒 Stack ${o.label.match(/the (\S+(?: \S+)?) in/)?.[1] || ''}`))));
       } else if (sc && z.cards.length) {
         el.append(h('div', { class: 'set-summary small muted' }, 'face down - scored at the end'));
       }
@@ -720,7 +725,7 @@ export async function renderPlay(root, ctx, args) {
         view.mode === 'overhead' ? h('span', { class: 'muted small', title: 'Points in face-down zones, scored at the end' }, `Hidden: ${st.players.map((x) => `${x.name} ${setsBreakdown(project, st, x.id).hidden}`).join(', ')}`) : null) : null,
       lm ? h('div', { class: 'you-can' }, h('b', {}, `${p.name}: `), lm.summary,
         ai ? null : h('span', { class: 'muted small' }, sets
-          ? ' Select a card in the hand to see its options, or drag it: to a zone, onto a face-up card (swap) or into another player\'s zone (to complete and take a trick).'
+          ? ' Select a card in the hand to see its options, or drag it: to a zone (a Day drop also stacks the trick it completes), onto a face-up card (swap) or into another player\'s zone (to complete and take a trick). Stacking is free.'
           : ` Legal cards are outlined in green: double-click one, or select it and press Play (or Enter).${shedding && lm.canDraw ? ' Click the draw pile to draw.' : ''}`)) : null,
       tricks && st.lastTrick ? h('div', { class: 'last-trick small' },
         `Last trick: ${player(st, st.lastTrick.winner).name} won with ${cname(st.lastTrick.winningCard)} - `,
@@ -732,6 +737,7 @@ export async function renderPlay(root, ctx, args) {
       h('div', { class: 'row gap wrap' },
         ai ? h('button', { class: 'btn primary', disabled: !!aiBusy, onclick: runAiTurn }, `▶ Play ${p.name}'s turn`) : null,
         phases.length > 1 && !automated ? h('button', { class: 'btn', disabled: !!aiBusy || st.turn.phase >= phases.length - 1, onclick: () => commit({ type: 'phase' }) }, 'Next phase') : null,
+        sets && !ai && lm?.options ? lm.options.filter((o) => o.kind === 'stack').map((o) => h('button', { class: 'btn', title: o.label, onclick: () => commit(o.action) }, `🔒 ${o.label.replace(/ so it cannot be taken$/, '')}`)) : null,
         sets && !ai && lm?.canDraw && !lm.discarding ? h('button', { class: 'btn', onclick: () => commit({ type: 'draw' }) }, 'Draw a card') : null,
         sets && !ai && !lm?.discarding ? h('button', { class: `btn ${lm?.actionsLeft ? '' : 'primary'}`, onclick: () => commit({ type: 'endTurn' }) }, lm?.actionsLeft ? 'End turn early' : 'End turn') : null,
         shedding && !ai && lm?.canDraw ? h('button', { class: `btn ${lm.legal.length ? '' : 'primary'}`, onclick: () => commit({ type: 'draw' }) }, lm.takeCount ? `Take ${lm.takeCount} cards` : 'Draw a card') : null,

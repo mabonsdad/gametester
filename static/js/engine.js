@@ -15,7 +15,7 @@
 
 import { END_AT, ENFORCE, SCORE_EVENTS, SCORE_WHO, zoneDef } from './model.js';
 import { run as runExpr } from './expr.js';
-import { assignCards, bestTrickWith, bestTricks, compileSets } from './sets.js';
+import { assignCards, bestTrickWith, bestTricks, compileSets, matchGroup } from './sets.js';
 
 // ------------------------------------------------------------------ RNG
 function rand(st) {
@@ -297,7 +297,7 @@ export function apply(project, st, action) {
   const a = action || {};
   const actor = a.actor || activePlayer(st).id;
   const who = player(st, actor)?.name || actor;
-  if (isSets(project) && st.hand && st.status === 'playing' && player(st, actor) && ['move', 'draw', 'swap', 'endTurn'].includes(a.type)) {
+  if (isSets(project) && st.hand && st.status === 'playing' && player(st, actor) && ['move', 'draw', 'swap', 'endTurn', 'stack'].includes(a.type)) {
     setsApply(project, st, a, actor);
     return st;
   }
@@ -1111,11 +1111,16 @@ function shedLegal(project, st, pid, out) {
 // worth the best split of its cards into combos (see sets.js) times the
 // zone's multiplier. Secret zones (face down) are only added to the score
 // when the game ends.
+// Stacking: in stackable zones (default: the zone others can complete
+// tricks in) a player may stack cards that form a trick. A stack always
+// scores as that trick and is safe; only unstacked cards can be used by
+// other players. Stacks live in st.stacks[zoneId] as lists of card ids.
 
 const SETS_DEFAULTS = {
   drawZone: 'deck', marketZone: 'market', discardZone: 'discard', actions: 2, handLimit: 6, valueStat: 'value',
   zones: [{ zone: 'day', multiplier: 2, secret: false }, { zone: 'night', multiplier: 1, secret: true }],
   giveZone: 'day', captureZone: 'night', giveNeedsTrick: true, counter: 'score', combos: [], endWhenEmpty: 'round',
+  stackZones: null, // zone ids where tricks can be stacked; null = the give zone
 };
 export const setsCfg = (project) => ({ ...SETS_DEFAULTS, ...(automation(project).sets || {}) });
 const setsC = (project) => compileSets(project, setsCfg(project));
@@ -1128,11 +1133,71 @@ function scoreZoneOf(project, st, zid) {
   return z?.owner ? scoreZones(project).find((s) => s.zone === z.defId) : null;
 }
 
-// The tricks in one zone: { total, tricks: [{ id, label, cards, points }], loose: [uids] }
+const stackZones = (project) => {
+  const S = setsCfg(project);
+  return Array.isArray(S.stackZones) ? S.stackZones : S.giveZone ? [S.giveZone] : [];
+};
+export const canStack = (project, st, zid) => !!st.zones[zid]?.owner && stackZones(project).includes(st.zones[zid].defId);
+
+// The zone's stacks that are still valid (all cards there, still a trick).
+function zoneStacks(project, st, zid) {
+  const C = setsC(project);
+  return (st.stacks?.[zid] || []).map((g) => {
+    if (!g.length || !g.every((u) => st.cards[u]?.zone === zid)) return null;
+    const m = matchGroup(C, g.map((u) => st.cards[u].defId));
+    return m ? { ...m, cards: g.slice(), stacked: true } : null;
+  }).filter(Boolean);
+}
+
+function addStack(st, zid, cards) {
+  st.stacks ||= {};
+  (st.stacks[zid] ||= []).push(cards.slice());
+}
+
+// The tricks in one zone: stacks first, then the best split of the other
+// cards. -> { total, tricks: [{ id, label, cards, points, stacked }],
+//   loose: cards in no trick, lone: cards in no stack, stacks }
 export function zoneTricks(project, st, zid) {
   const uids = st.zones[zid]?.cards || [];
   const defOf = (u) => st.cards[u]?.defId;
-  return assignCards(bestTricks(setsC(project), uids.map(defOf)), uids, defOf);
+  const stacks = zoneStacks(project, st, zid);
+  const inStack = new Set(stacks.flatMap((g) => g.cards));
+  const lone = uids.filter((u) => !inStack.has(u));
+  const r = assignCards(bestTricks(setsC(project), lone.map(defOf)), lone, defOf);
+  return {
+    total: stacks.reduce((a, g) => a + g.points, 0) + r.total,
+    tricks: [...stacks, ...r.tricks.map((t) => ({ ...t, stacked: false }))],
+    loose: r.loose,
+    lone,
+    stacks,
+  };
+}
+
+// Raw points of a zone if card type `add` were played there, optionally
+// stacked as the trick `stackAs` ({ defIds, points }).
+function zonePointsIf(project, st, zid, add, stackAs) {
+  const C = setsC(project);
+  const t = zoneTricks(project, st, zid);
+  const stacked = t.stacks.reduce((a, g) => a + g.points, 0);
+  const lone = t.lone.map((u) => st.cards[u].defId);
+  if (add) lone.push(add);
+  if (!stackAs) return stacked + bestTricks(C, lone).total;
+  for (const d of stackAs.defIds) lone.splice(lone.indexOf(d), 1);
+  return stacked + stackAs.points + bestTricks(C, lone).total;
+}
+
+// Why these cards cannot be stacked by pid, or null.
+function stackProblem(project, st, pid, cards) {
+  if (!Array.isArray(cards) || !cards.length) return 'Say which cards to stack ("cards": [ids]).';
+  if (new Set(cards).size !== cards.length || cards.some((u) => !st.cards[u])) return 'Those are not distinct cards on the table.';
+  const zid = st.cards[cards[0]].zone;
+  if (cards.some((u) => st.cards[u].zone !== zid)) return 'The cards of a stack must all be in the same zone.';
+  if (st.zones[zid].owner !== pid) return 'You can only stack cards in your own zones.';
+  if (!canStack(project, st, zid)) return `Cards cannot be stacked in the ${zoneDef(project, st.zones[zid].defId)?.name || zid}.`;
+  const lone = zoneTricks(project, st, zid).lone;
+  if (cards.some((u) => !lone.includes(u))) return 'Some of those cards are already in a stack.';
+  if (!matchGroup(setsC(project), cards.map((u) => st.cards[u].defId))) return `${cards.map((u) => cardName(project, st, u)).join(', ')} is not a trick.`;
+  return null;
 }
 
 // Every scoring zone of a player, with tricks and points.
@@ -1149,6 +1214,7 @@ export function setsBreakdown(project, st, pid) {
 
 function setsRescore(project, st) {
   const S = setsCfg(project);
+  for (const zid of Object.keys(st.stacks || {})) st.stacks[zid] = zoneStacks(project, st, zid).map((g) => g.cards);
   if (!automation(project).autoScore) return;
   for (const p of st.players) {
     if (!(S.counter in p.counters)) continue;
@@ -1202,6 +1268,19 @@ function setsApply(project, st, a, actor) {
     setsAdvance(project, st);
     return;
   }
+  if (a.type === 'stack') {
+    // Free: does not use an action, allowed at any point of your own turn.
+    const why = stackProblem(project, st, actor, a.cards);
+    if (why) throw new Error(why);
+    const zid = st.cards[a.cards[0]].zone;
+    const m = matchGroup(setsC(project), a.cards.map((u) => st.cards[u].defId));
+    addStack(st, zid, a.cards);
+    const zname = zoneDef(project, st.zones[zid].defId)?.name || zid;
+    log(st, actor, 'stack', `${who} stacked a ${m.label} (${a.cards.map((u) => cardName(project, st, u)).join(', ')}) in their ${zname}: it is safe now.`,
+      { data: { cards: a.cards.slice(), zone: zid, combo: m.label } });
+    setsRescore(project, st);
+    return;
+  }
   const to = a.type === 'move' ? resolveZone(st, a.to, actor) : null;
   if (H.discarding && !(a.type === 'move' && to && to === discardZ)) throw new Error(`Discard down to ${limit} cards first.`);
   if (!H.discarding && H.actionsUsed >= S.actions) throw new Error('You have no actions left this turn.');
@@ -1247,23 +1326,34 @@ function setsApply(project, st, a, actor) {
   const sz = scoreZoneOf(project, st, to);
   if (zone.owner === actor && sz) {
     const before = zoneTricks(project, st, to);
+    // "stack": true also stacks the trick this card completes.
+    const stackAs = a.stack && canStack(project, st, to) ? bestTrickWith(setsC(project), before.lone.map((u) => st.cards[u].defId), c.defId) : null;
     placeCard(project, st, a.card, to);
+    let stacked = null;
+    if (stackAs) {
+      const pool = before.lone.slice();
+      stacked = [a.card];
+      const need = stackAs.defIds.slice();
+      need.splice(need.indexOf(c.defId), 1);
+      for (const d of need) stacked.push(pool.splice(pool.findIndex((u) => st.cards[u].defId === d), 1)[0]);
+      addStack(st, to, stacked);
+    }
     const after = zoneTricks(project, st, to);
     const gain = (after.total - before.total) * mult(sz);
     const made = after.tricks.find((t) => t.cards.includes(a.card));
-    const done = gain > 0 ? ` - ${made ? `completes a ${made.label}` : 'improves their tricks'}: +${gain}` : '';
+    const done = gain > 0 ? ` - ${made ? `completes a ${made.label}` : 'improves their tricks'}${stacked ? ' and stacks it' : ''}: +${gain}` : stacked ? ` and stacks a ${stackAs.label}` : '';
     const faceUp = isPublicZone(project, st, to);
     const text = `${who} played ${name}${faceUp ? '' : ' face down'} to their ${zname}${done}.`;
-    log(st, actor, 'play', text, { publicText: faceUp ? text : `${who} played a card face down to their ${zname}.`, data: { card: a.card, to, gain, combo: gain > 0 ? made?.label : undefined } });
+    log(st, actor, 'play', text, { publicText: faceUp ? text : `${who} played a card face down to their ${zname}.`, data: { card: a.card, to, gain, combo: gain > 0 ? made?.label : undefined, stacked: !!stacked } });
     setsUsed(project, st, actor);
     return;
   }
   if (zone.owner && zone.owner !== actor && zone.defId === S.giveZone) {
     const C = setsC(project);
-    const loose = zoneTricks(project, st, to).loose;
+    const loose = zoneTricks(project, st, to).lone; // stacked cards are safe
     const best = bestTrickWith(C, loose.map((u) => st.cards[u].defId), c.defId);
     const victim = player(st, zone.owner).name;
-    if (!best && S.giveNeedsTrick !== false) throw new Error(`${name} does not complete a trick in ${victim}'s ${zname} (cards already in a finished trick cannot be used).`);
+    if (!best && S.giveNeedsTrick !== false) throw new Error(`${name} does not complete a trick with the unstacked cards in ${victim}'s ${zname} (stacked tricks are safe).`);
     placeCard(project, st, a.card, to, { faceUp: true });
     if (!best) {
       log(st, actor, 'give', `${who} gave ${name} to ${victim}'s ${zname}.`, { data: { card: a.card, to } });
@@ -1384,6 +1474,16 @@ function setsLegal(project, st, pid, out) {
   out.discarding = !!H.discarding;
   out.handLimit = limit;
   out.target = null;
+  // Stacking is free and allowed at any point of your turn.
+  for (const s of scoreZones(project)) {
+    const zid = `${pid}.${s.zone}`;
+    if (!st.zones[zid] || !canStack(project, st, zid)) continue;
+    const zname = zoneDef(project, s.zone).name;
+    for (const t of zoneTricks(project, st, zid).tricks.filter((x) => !x.stacked)) {
+      out.options.push({ kind: 'stack', zone: zid, cards: t.cards, gain: 0, label: `Stack the ${t.label} in your ${zname} (${t.cards.map(nm).join(', ')}) so it cannot be taken`, action: { type: 'stack', cards: t.cards } });
+    }
+  }
+  out.canStack = out.options.some((o) => o.kind === 'stack');
   if (H.discarding) {
     for (const u of hand) {
       out.cards[u] = '';
@@ -1405,22 +1505,27 @@ function setsLegal(project, st, pid, out) {
   if (out.canDraw) out.options.push({ kind: 'draw', label: `Draw a card from the ${deck.name}`, action: { type: 'draw' }, gain: 0 });
   const market = st.zones[S.marketZone]?.cards || [];
   const marketName = st.zones[S.marketZone]?.name || 'market';
-  const defs = (zid) => (st.zones[zid]?.cards || []).map((u) => st.cards[u].defId);
   const own = scoreZones(project).map((s) => ({ s, zid: `${pid}.${s.zone}` })).filter((x) => st.zones[x.zid]);
-  const ownBase = own.map((x) => bestTricks(C, defs(x.zid)).total);
+  const ownBase = own.map((x) => zoneTricks(project, st, x.zid).total);
+  const ownLone = own.map((x) => zoneTricks(project, st, x.zid).lone.map((u) => st.cards[u].defId));
   const giveName = zoneDef(project, S.giveZone)?.name || '';
   const capZ = scoreZones(project).find((z) => z.zone === S.captureZone);
   const opps = S.giveZone ? st.players.filter((o) => o.id !== pid).map((o) => ({ o, zid: `${o.id}.${S.giveZone}` })).filter((x) => st.zones[x.zid]) : [];
-  const oppLoose = opps.map((x) => zoneTricks(project, st, x.zid).loose.map((u) => st.cards[u].defId));
+  const oppLoose = opps.map((x) => zoneTricks(project, st, x.zid).lone.map((u) => st.cards[u].defId)); // stacked cards are safe
   for (const u of hand) {
     out.cards[u] = '';
     out.legal.push(u);
     const d = st.cards[u].defId;
     own.forEach((x, i) => {
-      const gain = (bestTricks(C, [...defs(x.zid), d]).total - ownBase[i]) * mult(x.s);
       const zname = zoneDef(project, x.s.zone).name;
       const up = isPublicZone(project, st, x.zid);
-      out.options.push({ kind: 'play', card: u, to: x.zid, gain, label: `Play to your ${zname}${up ? '' : ' (face down)'}${gain > 0 ? ` - completes a trick: +${gain}` : ''}`, action: { type: 'move', card: u, to: x.zid } });
+      const gain = (zonePointsIf(project, st, x.zid, d) - ownBase[i]) * mult(x.s);
+      const stackAs = canStack(project, st, x.zid) ? bestTrickWith(C, ownLone[i], d) : null;
+      if (stackAs) {
+        const g = (zonePointsIf(project, st, x.zid, d, stackAs) - ownBase[i]) * mult(x.s);
+        out.options.push({ kind: 'play', card: u, to: x.zid, gain: g, stack: true, label: `Play to your ${zname} and stack the ${stackAs.label} (safe)${g > 0 ? `: +${g}` : ''}`, action: { type: 'move', card: u, to: x.zid, stack: true } });
+      }
+      out.options.push({ kind: 'play', card: u, to: x.zid, gain, label: `Play to your ${zname}${up ? '' : ' (face down)'}${stackAs ? ' without stacking' : ''}${gain > 0 ? ` - completes a trick: +${gain}` : ''}`, action: { type: 'move', card: u, to: x.zid } });
     });
     opps.forEach((x, i) => {
       const best = bestTrickWith(C, oppLoose[i], d);
@@ -1443,7 +1548,8 @@ function setsLegal(project, st, pid, out) {
 function checkSets(project, st, action, actor) {
   const S = setsCfg(project);
   const active = activePlayer(st);
-  if (['move', 'draw', 'swap', 'endTurn'].includes(action.type) && actor !== active.id) return `It is ${active.name}'s turn, not ${player(st, actor).name}'s.`;
+  if (['move', 'draw', 'swap', 'endTurn', 'stack'].includes(action.type) && actor !== active.id) return `It is ${active.name}'s turn, not ${player(st, actor).name}'s.`;
+  if (action.type === 'stack') return stackProblem(project, st, actor, action.cards);
   const lm = legalMoves(project, st, actor);
   switch (action.type) {
     case 'draw':
@@ -1459,7 +1565,7 @@ function checkSets(project, st, action, actor) {
       if (!c || c.zone !== `${actor}.hand`) return 'Use a card from your own hand.';
       if (action.type === 'swap') return `Swap it for one of the face-up cards in the ${st.zones[S.marketZone]?.name || 'market'}.`;
       const z = to && st.zones[to];
-      if (z?.owner && z.owner !== actor && z.defId === S.giveZone) return `${cardName(project, st, action.card)} does not complete a trick in ${player(st, z.owner).name}'s ${zoneDef(project, z.defId).name} (cards already in a finished trick cannot be used).`;
+      if (z?.owner && z.owner !== actor && z.defId === S.giveZone) return `${cardName(project, st, action.card)} does not complete a trick with the unstacked cards in ${player(st, z.owner).name}'s ${zoneDef(project, z.defId).name} (stacked tricks are safe).`;
       if (to === resolveZone(st, S.discardZone, actor)) return `You only discard when you have more than ${lm.handLimit} cards at the end of your turn.`;
       return `Play it to your own ${scoreZones(project).map((x) => zoneDef(project, x.zone).name).join(' or ')}, swap it, or use it to complete a trick in another player's ${zoneDef(project, S.giveZone)?.name || 'zone'}.`;
     }
@@ -1501,6 +1607,9 @@ function setsBotChoice(project, st, pid) {
   const safeLoose = safeZ && st.zones[safeZ] ? zoneTricks(project, st, safeZ).loose.map(def) : [];
   const plan = (cards) => bestTricks(C, [...cards, ...safeLoose]).total;
   const find = (pred) => lm.options.find(pred)?.action || null;
+  // Stacking is free: protect every finished face-up trick straight away.
+  const stack = lm.options.find((o) => o.kind === 'stack');
+  if (stack) return stack.action;
   if (lm.discarding) {
     let pick = null; let bestLeft = -1;
     for (const [i, u] of hand.entries()) {
@@ -1510,15 +1619,16 @@ function setsBotChoice(project, st, pid) {
     return find((o) => o.kind === 'discard' && o.card === pick);
   }
   if (!lm.actionsLeft) return { type: 'endTurn' };
-  // 1. Take a trick from someone, or finish one of my own.
-  const now = lm.options.filter((o) => (o.kind === 'give' || o.kind === 'play') && o.gain > 0).sort((a, b) => b.gain - a.gain)[0];
+  // 1. Take a trick from someone, or finish one of my own (stacking it when the zone allows).
+  const now = lm.options.filter((o) => (o.kind === 'give' || o.kind === 'play') && o.gain > 0)
+    .sort((a, b) => b.gain - a.gain || Number(!!b.stack) - Number(!!a.stack))[0];
   if (now) return now.action;
   // 2. A trick I can finish this turn in a face-up (multiplied) zone: start it now.
   const left = lm.actionsLeft;
   let start = null;
   for (const z of zones.filter((x) => !x.secret)) {
     const zid = `${pid}.${z.zone}`;
-    const loose = zoneTricks(project, st, zid).loose.map(def);
+    const loose = zoneTricks(project, st, zid).lone.map(def);
     for (const t of bestTricks(C, [...loose, ...handDefs]).tricks) {
       const pool = loose.slice();
       const fromHand = t.defIds.filter((d) => { const i = pool.indexOf(d); if (i >= 0) { pool.splice(i, 1); return false; } return true; });
@@ -1527,7 +1637,7 @@ function setsBotChoice(project, st, pid) {
       if (!start || value > start.value) start = { value, zid, card: hand[handDefs.indexOf(fromHand[0])] };
     }
   }
-  if (start && (!safe || start.value > 0)) return find((o) => o.kind === 'play' && o.card === start.card && o.to === start.zid);
+  if (start && (!safe || start.value > 0)) return find((o) => o.kind === 'play' && o.card === start.card && o.to === start.zid && !o.stack);
   // 3. Build a trick in the safe (face-down) zone.
   if (safeZ) {
     const r = bestTricks(C, [...safeLoose, ...handDefs]);
@@ -1808,7 +1918,12 @@ export function describeAutomation(project) {
     const zs = scoreZones(project);
     lines.push(`Set collection: on your turn take up to ${S.actions} action${S.actions === 1 ? '' : 's'} (the same one more than once is fine): draw a card from the ${zn(S.drawZone)}; ${zoneDef(project, S.marketZone) ? `swap a card from your hand for a face-up card in the ${zn(S.marketZone)} (it takes that card's place); ` : ''}play a card from your hand to your ${zs.map((z) => `${zn(z.zone)}${zoneDef(project, z.zone)?.faceUp === false ? ' (face down)' : ' (face up)'}`).join(' or ')}${zoneDef(project, S.giveZone) ? `; or put a card into another player's ${zn(S.giveZone)}${S.giveNeedsTrick !== false ? ' when it completes a trick there' : ''} - you then take the whole trick to your ${zn(S.captureZone)}` : ''}.`);
     lines.push(`Scoring: each zone scores the best way of splitting its cards into the tricks below - each card counts in at most one trick, and cards in no trick score nothing. A trick is worth the sum of its cards' "${S.valueStat}" stat unless noted, times the zone's multiplier: ${zs.map((z) => `${zn(z.zone)} ×${mult(z)}${z.secret ? ' (kept secret until the end of the game)' : ''}`).join(', ')}.`);
-    if (zoneDef(project, S.giveZone)) lines.push(`Cards that are already part of a finished trick are safe: only a player's loose cards can be used to complete a trick in their ${zn(S.giveZone)}.`);
+    const stackable = stackZones(project).filter((z) => zoneDef(project, z));
+    if (stackable.length) {
+      lines.push(`Stacking (free, any time on your own turn, does not use an action): stack cards in your ${stackable.map(zn).join(' or ')} that form a trick. A stack always scores as that trick - a wild card is worth what it is stacked with - and is safe: other players can only use your unstacked cards to complete a trick and take it. Unstacked cards still score in their best arrangement.`);
+    } else if (zoneDef(project, S.giveZone)) {
+      lines.push(`Only a player's cards that are in no trick can be used to complete a trick in their ${zn(S.giveZone)}.`);
+    }
     if (Number(S.handLimit)) lines.push(`Hand limit: at the end of your turn you must discard down to ${S.handLimit} cards.`);
     lines.push('Tricks:');
     const C = setsC(project);

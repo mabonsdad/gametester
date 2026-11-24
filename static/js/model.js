@@ -510,14 +510,14 @@ export function werewolfProject() {
         { id: 'potion', label: 'Potion', pattern: 'witch + villager + werewolf', points: '' },
         { id: 'lovers', label: 'Lovers', pattern: 'cupid + 2 any', points: '' },
         { id: 'pack', label: 'Pack', pattern: 'alpha wolf + 2 werewolves', points: '' },
-        { id: 'guard', label: 'Guard', pattern: 'defender + villager/seer/witch', points: 'sum * 2' },
+        { id: 'guard', label: 'Guard', pattern: 'defender + villager/seer/witch', points: '' },
         { id: 'feast', label: 'Feast', pattern: 'vampire + 3 villagers', points: '' },
       ],
       endWhenEmpty: 'round',
     },
   };
   p.rules = {
-    overview: 'A village by Day, a hunt by Night. Collect cards and lay them in front of you as tricks: sets that match the rule printed on a card.\nDay tricks are laid face up and score double, but while a Day trick is unfinished another player can complete it with a card of their own and take it.\nNight tricks are laid face down: they are safe, score single points and stay secret until the end.',
+    overview: 'A village by Day, a hunt by Night. Collect cards and lay them in front of you as tricks: sets that match the rule printed on a card.\nDay tricks are laid face up and score double. Stack a finished Day trick to make it safe: until then another player can complete a trick with your unstacked cards and take it.\nNight tricks are laid face down: they are safe, score single points and stay secret until the end.',
     objective: 'Have the most points when the Night pile runs out.',
     turnRules:
       'Setup: everyone gets 3 cards. Four cards are turned face up as the Day cards; the rest form the Night pile.\n' +
@@ -526,21 +526,22 @@ export function werewolfProject() {
       '2. Swap a card from your hand for one of the Day cards (yours takes its place).\n' +
       '3. Play a card face up to your Day tricks.\n' +
       '4. Play a card face down to your Night tricks.\n' +
-      "5. Put a card into another player's Day tricks if it completes a trick with their loose cards - you take that whole trick, face down, to your Night tricks.\n" +
-      'At the end of your turn you may hold at most 6 cards: discard any extra.\n' +
-      'Cards that are already part of a finished trick are safe; only loose cards can be used against you.',
+      "5. Put a card into another player's Day tricks if it completes a trick with their unstacked cards - you take that whole trick, face down, to your Night tricks.\n" +
+      'Stacking (free, any time on your turn): stack cards in your Day tricks that form a trick. A stack is safe - nobody can take it - and always scores as that trick. Unstacked cards can be used by other players, even if they already make a trick.\n' +
+      'At the end of your turn you may hold at most 6 cards: discard any extra.',
     endGame: 'When the Night pile runs out, play continues until everyone has had the same number of turns. Then the Night tricks are revealed, and the highest total wins.',
     scoring:
-      "Only cards in a trick score. A trick is worth the sum of its cards' values - doubled in your Day tricks, single in your Night tricks. Each card counts in one trick only; the app always finds the best arrangement of the cards in each zone.\n" +
+      "Only cards in a trick score. A trick is worth the sum of its cards' values - doubled in your Day tricks, single in your Night tricks. Each card counts in one trick only. A stack scores as the trick it was stacked as; for all other cards the app finds the best arrangement.\n" +
       'Mob: 5 Villagers (5).\n' +
       'Vision: a Seer + 3 different cards, e.g. Seer, Witch, Villager, Werewolf (9) or Seer, Seer, Werewolf, Cupid (7).\n' +
       'Hunt: a Werewolf + 1 Villager (4).\n' +
       'Potion: a Witch + a Villager + a Werewolf (7).\n' +
       'Lovers: Cupid + any 2 cards (the two cards\' values).\n' +
       'Pack: the Alpha Wolf + 2 Werewolves (10).\n' +
-      'Guard: a Defender + a Villager, Seer or Witch; the Defender is worth the same as that card (2, 4 or 6).\n' +
+      'Guard: a Defender + a Villager, Seer or Witch (2, 4 or 6).\n' +
+      'The Defender is wild: in any trick it is worth as much as the most valuable other card it is with, so its worth depends on what it is stacked with.\n' +
       'Feast: a Vampire + 3 Villagers (8).',
-    aiHints: 'A trick you finish in your Day tricks within one turn is never at risk and scores double - for example play a Werewolf and a Villager together. Loose cards left in your Day tricks can be stolen. Build big tricks (Mob, Feast) face down in the Night. Watch other players\' loose Day cards for tricks you can complete and take. Swap for Day cards that complete a trick.',
+    aiHints: 'Stack every Day trick you finish (free) - unstacked cards can be stolen. A trick you finish and stack within one turn is never at risk and scores double - for example play a Werewolf, then play the Villager with "stack": true. Build big tricks (Mob, Feast) face down in the Night. Watch other players\' loose Day cards for tricks you can complete and take. Swap for Day cards that complete a trick.',
   };
   const card = (id, name, icon, value, count, color, description, rules) => ({
     ...blankCard(p), id, name, icon, count, color, description, rules, startZone: 'nightpile', stats: { value }, tags: ['werewolf-tricks'],
@@ -552,7 +553,7 @@ export function werewolfProject() {
     card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potion: Witch + Villager (saved) + Werewolf (killed).'),
     card('cupid', 'Cupid', '💘', 0, 3, '#f6c2d6', 'Value 0', 'Lovers: Cupid + any 2 cards.'),
     card('alpha-wolf', 'Alpha Wolf', '🌕', 4, 1, '#8c7a9e', 'Value 4', 'Pack: Alpha Wolf + 2 Werewolves.'),
-    card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Worth the card it guards', 'Guard: a Defender + a Villager, Seer or Witch.'),
+    card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Wild: worth the best card it is with', 'Guard: a Defender + a Villager, Seer or Witch.'),
     card('vampire', 'Vampire', '🧛', 5, 4, '#d27a86', 'Value 5', 'Feast: a Vampire + 3 Villagers.'),
   ];
   p.variants = [

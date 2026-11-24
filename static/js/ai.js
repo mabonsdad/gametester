@@ -67,15 +67,17 @@ export function buildSystemPrompt(project) {
      {"type":"draw"}                                          draw from the ${S.drawZone}
      {"type":"swap","card":"<your hand card id>","with":"<face-up card id in ${S.marketZone}>"}
      {"type":"move","card":"<your hand card id>","to":"<one of your scoring zones, e.g. ${(S.zones || []).map((z) => z.zone).join(' or ')}>"}
+     {"type":"move","card":"<id>","to":"<zone>","stack":true}  also stack the trick this card completes (protects it)
      {"type":"move","card":"<your hand card id>","to":"<another player's zone, e.g. p2.${S.giveZone}>"}   only when it completes a trick there (listed in the state)
      {"type":"move","card":"<your hand card id>","to":"${S.discardZone}"}      only when you are told to discard
      {"type":"endTurn"}                                       to stop before using all your actions
+     {"type":"stack","cards":["<id>","<id>"]}                 FREE (not an action): stack your own unstacked cards that form a trick
   ],
   "winConfidence": 0-100,   // honest estimate that you will win the game from here
   "experience": "one sentence on how this turn felt from your seat (interesting choice? stuck? clever steal?)",
   "designerNotes": "rule ambiguities or design problems you noticed, or empty string"
 }
-The turn passes automatically after your last action. If you draw a card you will be asked again for the rest of your turn (you will then see the card), so put a draw last in your list.`
+Stacked tricks are safe; unstacked cards in a face-up zone can be used by other players to complete a trick and take it, so stack a trick as you finish it ("stack": true on the move). The turn passes automatically after your last action. If you draw a card you will be asked again for the rest of your turn (you will then see the card), so put a draw last in your list.`
     : shedding
     ? `Reply with ONE JSON object and nothing else:
 {
@@ -186,8 +188,10 @@ ${wilds.length ? `For a wild card, add "choose" with one of: ${lm.colours.join('
     const lm = legalMoves(project, st, pid);
     const nmList = (uids) => uids.length ? uids.map(nm).join(', ') : 'none';
     const zoneText = (pidZ, z, mineView) => {
-      const tricks = z.tricks.map((t) => `${t.label} [${t.cards.map((u) => u).join(' ')}] = ${t.points}`).join('; ') || 'no tricks';
-      return `${z.name} (×${z.multiplier}${z.secret ? ', face down' : ''}): ${tricks}; loose: ${nmList(z.loose)}${!z.secret && z.loose.length ? (mineView ? ' (at risk - others can complete tricks with these)' : ' (you may be able to complete a trick with these)') : ''} → ${z.points} points`;
+      const tricks = z.tricks.map((t) => `${t.stacked ? 'STACKED ' : ''}${t.label} [${t.cards.join(' ')}] = ${t.points}`).join('; ') || 'no tricks';
+      const lone = z.tricks.filter((t) => !t.stacked).flatMap((t) => t.cards).concat(z.loose);
+      const risk = !z.secret && lone.length ? (mineView ? ' (UNSTACKED, at risk: others can complete tricks with these - stack your tricks)' : ' (unstacked: you may be able to complete a trick with these)') : '';
+      return `${z.name} (×${z.multiplier}${z.secret ? ', face down' : ''}): ${tricks}; cards in no trick: ${nmList(z.loose)}${risk} → ${z.points} points`;
     };
     const mine = setsBreakdown(project, st, pid);
     const others = st.players.filter((o) => o.id !== pid).map((o) => {
@@ -195,6 +199,7 @@ ${wilds.length ? `For a wild card, add "choose" with one of: ${lm.colours.join('
       return `${o.id} ${o.name}: ${b.zones.map((z) => (z.secret ? `${z.name}: ${st.zones[z.zid]?.cards.length ?? 0} card(s) face down` : zoneText(o.id, z, false))).join(' | ')}`;
     }).join('\n');
     const hits = (lm.options || []).filter((o) => o.gain > 0).map((o) => `- ${JSON.stringify(o.action)}: ${o.label.replace(/^Play/, `play ${nm(o.card)}`)}`);
+    const stacks = (lm.options || []).filter((o) => o.kind === 'stack').map((o) => `- ${JSON.stringify(o.action)}: ${o.label}`);
     const deck = st.zones[S.drawZone];
     trickInfo = `
 Actions left this turn: ${lm.actionsLeft ?? 0} of ${S.actions}. ${deck?.name || 'Draw pile'}: ${deck?.cards.length ?? 0} card(s) left.${st.hand.lastSeat != null ? ` The draw pile is empty: the game ends after ${st.players[st.hand.lastSeat].name}'s turn.` : ''}
@@ -206,7 +211,7 @@ ${mine.zones.map((z) => '- ' + zoneText(pid, z, true)).join('\n')}
 Your points: ${mine.public} showing${mine.hidden ? ` + ${mine.hidden} hidden in face-down zones` : ''} = ${mine.total}.
 Other players' tricks:
 ${others}
-${hits.length ? `Moves that score straight away:\n${hits.join('\n')}\n` : 'No single move scores straight away.\n'}`;
+${stacks.length ? `Free stacks you can make now (recommended):\n${stacks.join('\n')}\n` : ''}${hits.length ? `Moves that score straight away:\n${hits.join('\n')}\n` : 'No single move scores straight away.\n'}`;
   } else if (isTricks(project) && st.hand) {
     const H = st.hand;
     const lm = legalMoves(project, st, pid);
