@@ -9,6 +9,7 @@ import {
   getPath, parseSetLines, slug,
 } from '../model.js';
 import { field, h, modal } from '../ui.js';
+import { THEMES } from '../themes.js';
 
 export async function renderRules(root, ctx) {
   const project = ctx.project;
@@ -56,7 +57,12 @@ export async function renderRules(root, ctx) {
         h('div', { class: 'grid-3' },
           field('Min players', num(project.players, 'min', { min: 1, max: 6 })),
           field('Max players', num(project.players, 'max', { min: 1, max: 6 })),
-          field('Default players', num(project.players, 'default', { min: 1, max: 6 }))))),
+          field('Default players', num(project.players, 'default', { min: 1, max: 6 }))),
+        field('Player view look', h('select', {
+          value: project.theme || '',
+          onchange: (e) => { project.theme = e.target.value; ctx.changed(); },
+        }, Object.entries(THEMES).map(([id, t]) => h('option', { value: id, selected: (project.theme || '') === id }, t.label))),
+        'How the game looks in the player view and share links: colours, card frames, opponents and wording.'))),
 
       section('Zones', 'Places cards can be. Shared zones sit in the middle of the table; per-player zones appear at each seat. Every player has a Hand.', zonesTable()),
 

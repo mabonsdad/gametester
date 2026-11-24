@@ -17,10 +17,13 @@ import { SUITS, applyVariants, normalizeProject, uid, zoneDef } from './model.js
 import { finishTurn, rollAiCatch, takeAiTurn } from './turns.js';
 import { cardBack, cardFace, h, modal, toast } from './ui.js';
 import { showReloadBar, watchVersion } from './version.js';
+import { applyTheme, themeOf } from './themes.js';
+import { compileSets, isWildValue } from './sets.js';
 
 const app = document.getElementById('app');
 const HUMAN = 'p1';
-const OPPONENTS = [['Ava', '🦊'], ['Ben', '🐻'], ['Cai', '🦉'], ['Dot', '🐢'], ['Eli', '🐙']];
+let theme = themeOf(null); // the look (themes.js): opponents, words, stylesheet
+let cheatOpen = false;
 const PROVIDERS = {
   random: { label: 'Quick bots', note: 'instant moves, simple tactics' },
   anthropic: { label: 'Claude', note: 'thinks for a few seconds each turn' },
@@ -86,6 +89,7 @@ async function boot() {
     return message('This game is not available', h('p', {}, e.message));
   }
   document.title = base.name;
+  theme = applyTheme(base);
   welcome();
 }
 
@@ -114,7 +118,7 @@ function welcome() {
   const teams = automation(base).teams === 'partners';
   app.replaceChildren(h('div', { class: 'pv-welcome' },
     h('div', { class: 'pv-panel' },
-      h('div', { class: 'pv-title' }, h('span', { class: 'pv-logo' }, '🂡'), h('div', {}, h('h1', {}, base.name), base.description ? h('p', { class: 'muted' }, base.description) : null)),
+      h('div', { class: 'pv-title' }, h('span', { class: 'pv-logo' }, theme.logo), h('div', {}, h('h1', {}, base.name), theme.tagline ? h('p', { class: 'pv-tagline' }, theme.tagline) : null, base.description ? h('p', { class: 'muted' }, base.description) : null)),
       h('details', { class: 'pv-howto', open: true }, h('summary', {}, 'How to play'), rulesContent(base, true)),
       h('div', { class: 'pv-form' },
         h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Your name'), nameIn),
@@ -133,7 +137,7 @@ function welcome() {
             savePrefs({ name: choices.name === 'You' ? '' : choices.name, provider: choices.provider });
             start();
           },
-        }, 'Start game ▶')),
+        }, theme.start)),
       shareInfo ? h('p', { class: 'muted small pv-fine' }, 'Games are recorded to help improve this game while it is being designed.') : null)));
   nameIn.focus();
 }
@@ -158,7 +162,7 @@ function rulesContent(project, brief = false) {
 function start() {
   game = applyVariants(base, choices.picks);
   const n = choices.count;
-  const opp = OPPONENTS.slice(0, n - 1);
+  const opp = theme.opponents.slice(0, n - 1);
   avatars = { [HUMAN]: '🙂' };
   const players = [{ name: choices.name, controller: 'human' }];
   opp.forEach(([name, emoji], i) => { players.push({ name, controller: CONTROLLER[choices.provider] || 'ai-random' }); avatars[`p${i + 2}`] = emoji; });
@@ -395,7 +399,8 @@ function render() {
       h('div', { class: 'pv-opps' }, st.players.filter((p) => p.id !== HUMAN).map((p) => opponent(p, winners))),
       tableArea(),
       myArea()),
-    feedPanel()));
+    feedPanel(),
+    cheatOpen && isSets(game) ? cheatSheet() : null));
 }
 
 function topBar() {
@@ -412,6 +417,7 @@ function topBar() {
     h('div', { class: 'pv-top-title' }, h('b', {}, game.name), h('span', { class: 'muted' }, where)),
     h('div', { class: 'pv-scores', title: c0?.name }, c0 ? h('span', { class: 'muted small' }, `${c0.name}:`) : null, scores),
     h('div', { class: 'pv-top-btns' },
+      isSets(game) ? h('button', { class: `btn small ${cheatOpen ? 'primary' : ''}`, onclick: toggleCheat, title: 'Which cards make which tricks, and what they score' }, '📜 Tricks') : null,
       h('button', { class: 'btn small', onclick: showRules, title: 'Rules' }, '? Rules'),
       h('button', { class: 'btn small', onclick: menu, title: 'Menu' }, '☰')));
 }
@@ -491,11 +497,11 @@ function oppSets(p) {
     const name = zoneDef(game, z.zone).name;
     if (z.secret && !st.revealed) {
       const n = st.zones[zid].cards.length;
-      return h('div', { class: 'pv-opp-zone' }, h('span', { class: 'pv-zone-label' }, `${name}: ${n} card${n === 1 ? '' : 's'} face down`));
+      return h('div', { class: `pv-opp-zone pv-zone-def-${z.zone}` }, h('span', { class: 'pv-zone-label' }, `${name}: ${n} card${n === 1 ? '' : 's'} face down`));
     }
     const o = opts.find((x) => x.to === zid);
     return h('div', {
-      class: `pv-opp-zone ${o ? 'pv-target' : ''}`, title: o ? o.label : '',
+      class: `pv-opp-zone pv-zone-def-${z.zone} ${o ? 'pv-target' : ''}`, title: o ? o.label : '',
       onclick: o ? () => act(o.action) : null,
     }, h('span', { class: 'pv-zone-label' }, name, o ? h('b', { class: 'pv-target-hint' }, ` ← ${o.label}`) : null), trickGroups(zid, { compact: true }));
   }));
@@ -508,7 +514,7 @@ function mySets() {
     const o = opts.find((x) => x.kind === 'play' && x.to === zid);
     const def = zoneDef(game, z.zone);
     const points = zoneTricks(game, st, zid).total * (Number(z.multiplier) || 1);
-    return h('div', { class: `pv-my-zone ${o ? 'pv-target' : ''} ${o?.gain > 0 ? 'scores' : ''}`, onclick: o ? () => act(o.action) : null, title: o ? o.label : '' },
+    return h('div', { class: `pv-my-zone pv-zone-def-${z.zone} ${o ? 'pv-target' : ''} ${o?.gain > 0 ? 'scores' : ''}`, onclick: o ? () => act(o.action) : null, title: o ? o.label : '' },
       h('div', { class: 'pv-zone-label' }, h('b', {}, def.name), ` ×${Number(z.multiplier) || 1}${def.faceUp === false ? ' · face down, secret until the end' : ' · face up'} · ${points} pts`,
         o ? h('b', { class: 'pv-target-hint' }, o.gain > 0 ? ` ← tap to play: +${o.gain}` : ' ← tap to play here') : null),
       trickGroups(zid));
@@ -557,7 +563,7 @@ function zoneView(zid) {
   }
   const extra = isShedding(game) && H && zid === automation(game).shedding.discardZone && H.colour
     ? h('div', { class: 'colour-chip', style: { background: colourHex(H.colour) } }, `Colour: ${H.colour}`) : null;
-  return h('div', { class: `pv-zone layout-${def.layout || 'spread'} ${trickZone ? 'trick' : ''}` },
+  return h('div', { class: `pv-zone pv-zone-def-${z.defId} layout-${def.layout || 'spread'} ${trickZone ? 'trick' : ''}` },
     h('div', { class: 'pv-zone-label' }, z.name, def.layout === 'stack' ? h('span', { class: 'pv-count' }, z.cards.length) : null),
     h('div', { class: 'pv-zone-cards' }, body), extra);
 }
@@ -573,7 +579,7 @@ function statusLine() {
   if (isShedding(game) && H) bits.push(h('span', { class: 'muted' }, st.dir === 1 ? '⟳ play goes clockwise' : '⟲ play is reversed'));
   if (st.status === 'playing' && !st.pending) {
     const a = activePlayer(st);
-    bits.unshift(h('span', { class: `pv-whose ${a.id === HUMAN ? 'me' : ''}` }, a.id === HUMAN ? 'Your turn' : thinking ? `${a.name} is thinking…` : `${a.name}'s turn`));
+    bits.unshift(h('span', { class: `pv-whose ${a.id === HUMAN ? 'me' : ''}` }, a.id === HUMAN ? theme.yourTurn : thinking ? `${a.name} is thinking…` : `${a.name}'s turn`));
   }
   return h('div', { class: 'pv-status' }, bits);
 }
@@ -712,8 +718,68 @@ function sortHand(cards) {
 
 function feedPanel() {
   return h('aside', { class: 'pv-feed' },
-    h('h3', {}, 'What happened'),
+    h('h3', {}, theme.feedTitle),
     h('ol', {}, feed.slice(0, 30).map((f) => h('li', { class: `pv-f-${f.kind}` }, f.text))));
+}
+
+// ================================================================ cheat sheet (set collection)
+function toggleCheat() {
+  cheatOpen = !cheatOpen;
+  if (cheatOpen) tele('cheatOpened');
+  render();
+}
+
+// Points for a trick written with named cards: a number or a range (e.g. a
+// slot with alternatives). Tricks with "any" cards score the cards' values.
+function trickPoints(C, cb) {
+  if (cb.slots.some((s) => !s.ids)) return null;
+  let fills = [[]];
+  for (const s of cb.slots) {
+    const next = [];
+    for (const pre of fills) for (const id of s.ids) next.push([...pre, ...Array(s.count).fill(id)]);
+    fills = next.slice(0, 300);
+  }
+  const pts = fills.map((ids) => C.pointsOf(cb, ids)).filter((n) => n > 0);
+  return pts.length ? [Math.min(...pts), Math.max(...pts)] : null;
+}
+
+function cheatSheet() {
+  const S = setsCfg(game);
+  const C = compileSets(game, S);
+  const byId = Object.fromEntries(game.cards.map((c) => [c.id, c]));
+  const chip = (id) => {
+    const d = byId[id];
+    return h('span', { class: 'pv-chipcard', style: { background: d?.color }, title: d?.name }, d?.icon || d?.name?.slice(0, 2));
+  };
+  const slotView = (s) => {
+    const ids = s.ids ? [...s.ids] : null;
+    if (!ids) return h('span', { class: 'pv-cs-slot' }, Array.from({ length: Math.min(s.count, 3) }, () => h('span', { class: 'pv-chipcard any' }, '?')), h('span', { class: 'pv-cs-x' }, s.distinct ? `${s.count} different` : s.count === 1 ? 'any card' : `any ${s.count}`));
+    const one = ids.length === 1 ? chip(ids[0]) : h('span', { class: 'pv-cs-alt' }, ids.map((id, i) => [i ? h('span', { class: 'pv-cs-or' }, 'or') : null, chip(id)]));
+    return h('span', { class: 'pv-cs-slot' }, one, s.count > 1 ? h('span', { class: 'pv-cs-x' }, `×${s.count}`) : null);
+  };
+  const zones = (S.zones || []).filter((z) => zoneDef(game, z.zone));
+  const range = (r, m = 1) => (r ? (r[0] === r[1] ? `${r[0] * m}` : `${r[0] * m}-${r[1] * m}`) : null);
+  const wild = game.cards.filter((c) => isWildValue(c.stats?.[S.valueStat || 'value']));
+  const stackable = (Array.isArray(S.stackZones) ? S.stackZones : S.giveZone ? [S.giveZone] : []).map((z) => zoneDef(game, z)?.name).filter(Boolean);
+  const secret = zones.filter((z) => z.secret).map((z) => zoneDef(game, z.zone).name);
+  return h('aside', { class: 'pv-cheat', role: 'dialog', 'aria-label': 'Tricks and scores' },
+    h('div', { class: 'pv-cheat-head' }, h('b', {}, '📜 Tricks & scores'), h('button', { class: 'icon-btn', onclick: toggleCheat, title: 'Close' }, '✕')),
+    h('table', { class: 'pv-cheat-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Trick'), h('th', {}, 'Cards'), zones.map((z) => h('th', { class: 'num' }, `${zoneDef(game, z.zone).name} ×${Number(z.multiplier) || 1}`)))),
+      h('tbody', {}, C.combos.map((cb) => {
+        const r = trickPoints(C, cb);
+        return h('tr', {},
+          h('td', { class: 'pv-cs-name' }, cb.label),
+          h('td', {}, h('span', { class: 'pv-cs-cards' }, cb.slots.map((s, i) => [i ? h('span', { class: 'pv-cs-plus' }, '+') : null, slotView(s)]))),
+          zones.map((z) => h('td', { class: 'num' }, r ? range(r, Number(z.multiplier) || 1) : `sum ×${Number(z.multiplier) || 1}`)));
+      }))),
+    h('div', { class: 'pv-cs-values' }, h('span', { class: 'muted small' }, 'Card values:'),
+      game.cards.map((c) => h('span', { class: 'pv-cs-value' }, chip(c.id), h('span', {}, isWildValue(c.stats?.[S.valueStat || 'value']) ? 'wild' : String(c.stats?.[S.valueStat || 'value'] ?? 0))))),
+    h('ul', { class: 'pv-cs-notes' },
+      h('li', {}, 'Only cards in a trick score; each card counts in one trick.'),
+      wild.length ? h('li', {}, `${wild.map((c) => c.name).join(', ')}: wild - worth as much as the best card it is with.`) : null,
+      stackable.length ? h('li', {}, `Stack a finished trick in your ${stackable.join(' or ')} (free) so nobody can take it.`) : null,
+      secret.length ? h('li', {}, `${secret.join(' and ')} stay face down and are scored at the end.`) : null));
 }
 
 // ================================================================ dialogs

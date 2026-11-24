@@ -1,0 +1,171 @@
+/* Player view theme "werewolf": a moonlit village. Loaded by themes.js for
+   projects with theme "werewolf"; everything is scoped to .theme-werewolf. */
+
+.theme-werewolf {
+  --pv-ink: #ece6d6;
+  --pv-panel: #f4ead2;
+  --ww-night: #0b1026;
+  --ww-night-2: #161d44;
+  --ww-gold: #e9c46a;
+  --ww-blood: #8e1b23;
+  --ww-ink: #2b2116;
+  --ww-serif: Georgia, 'Palatino Linotype', 'Book Antiqua', Palatino, serif;
+  background:
+    radial-gradient(1px 1px at 12% 18%, #fff 50%, transparent 51%),
+    radial-gradient(1px 1px at 32% 8%, #fff 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 52% 22%, #fff9 50%, transparent 51%),
+    radial-gradient(1px 1px at 68% 12%, #fff 50%, transparent 51%),
+    radial-gradient(1px 1px at 88% 28%, #fffb 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 22% 38%, #fff8 50%, transparent 51%),
+    radial-gradient(1px 1px at 44% 46%, #fff9 50%, transparent 51%),
+    radial-gradient(1px 1px at 76% 40%, #fff 50%, transparent 51%),
+    radial-gradient(ellipse at 50% 0%, var(--ww-night-2) 0%, var(--ww-night) 70%);
+  background-color: var(--ww-night);
+  background-attachment: fixed;
+  font-family: var(--ww-serif);
+}
+html.pv-html:has(body.theme-werewolf) { background: var(--ww-night, #0b1026); }
+
+/* the moon, the forest and the fog stay behind everything */
+.theme-werewolf::before {
+  content: ''; position: fixed; z-index: 0; pointer-events: none;
+  top: 70px; right: max(300px, 22vw); width: 130px; height: 130px; border-radius: 50%;
+  background: radial-gradient(circle at 38% 36%, #fffbe9 0%, #f3e3b0 45%, #d8c385 70%, #bfa868 100%);
+  box-shadow: 0 0 60px 20px rgba(255, 236, 170, .28), 0 0 160px 60px rgba(255, 236, 170, .12);
+  animation: ww-glow 6s ease-in-out infinite;
+}
+.theme-werewolf::after {
+  content: ''; position: fixed; z-index: 0; pointer-events: none; left: 0; right: 0; bottom: 0; height: 26vh;
+  background:
+    linear-gradient(to top, rgba(180, 190, 230, .18), transparent 70%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 80' preserveAspectRatio='none'%3E%3Cpath d='M0 80V60h10l10-30 10 30 10-5 12-35 12 35 11 7 10-22 10 22 15-12 14-40 14 40 12 8 10-23 10 23 15-6 13-27 13 27 14 8 11-22 11 22 15-10 14-35 14 35 12 10 10-18 10 18 16-6 12-26 12 26 13 6 11-16 10 16h4v20z' fill='%23070a18'/%3E%3C/svg%3E") bottom / 640px 120px repeat-x;
+  opacity: .9;
+}
+@keyframes ww-glow { 50% { box-shadow: 0 0 70px 26px rgba(255, 236, 170, .34), 0 0 180px 70px rgba(255, 236, 170, .14); } }
+.theme-werewolf main { position: relative; z-index: 1; }
+
+/* ---------- welcome */
+.theme-werewolf .pv-panel {
+  background: linear-gradient(170deg, #f7eed8, #e9dab4); color: var(--ww-ink);
+  border: 1px solid #b89a5c; box-shadow: 0 0 0 6px rgba(20, 16, 40, .6), 0 30px 80px rgba(0, 0, 0, .6);
+}
+.theme-werewolf .pv-title h1 { font-family: var(--ww-serif); letter-spacing: .04em; font-variant: small-caps; color: #3b2414; }
+.theme-werewolf .pv-logo { flex: none; width: 64px; height: 64px; display: grid; place-items: center; border-radius: 50%; font-size: 38px;
+  background: radial-gradient(circle at 40% 35%, #fffbe9, #e6d29a 60%, #b49a5c); box-shadow: 0 0 24px rgba(233, 196, 106, .7); }
+.theme-werewolf .pv-tagline { color: #5a3d22; }
+.theme-werewolf .pv-choice.on { border-color: var(--ww-blood); background: #f8e4d9; }
+
+/* ---------- buttons */
+.theme-werewolf .btn { font-family: var(--ww-serif); }
+.theme-werewolf .btn.primary { background: var(--ww-blood); border-color: #5d0f15; color: #fff3d6; }
+.theme-werewolf .btn.primary:hover { background: #a3222c; }
+
+/* ---------- top bar, scores, feed */
+.theme-werewolf .pv-top { background: linear-gradient(to bottom, rgba(5, 7, 20, .85), rgba(5, 7, 20, .55)); border-bottom: 1px solid rgba(233, 196, 106, .25); }
+.theme-werewolf .pv-top-title b { color: var(--ww-gold); font-variant: small-caps; letter-spacing: .05em; font-size: 1.1em; }
+.theme-werewolf .pv-score { background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .12); }
+.theme-werewolf .pv-score.mine { background: var(--ww-gold); color: #2b1d05; }
+.theme-werewolf .pv-feed { background: rgba(5, 7, 20, .6); border-left: 1px solid rgba(233, 196, 106, .18); position: relative; z-index: 1; }
+.theme-werewolf .pv-feed h3 { color: var(--ww-gold); font-variant: small-caps; letter-spacing: .05em; }
+.theme-werewolf .pv-feed li { background: rgba(255, 255, 255, .04); }
+.theme-werewolf .pv-f-big { color: var(--ww-gold); }
+.theme-werewolf .pv-f-alert { color: #ff9a8a; }
+
+/* ---------- opponents: villagers by lantern light */
+.theme-werewolf .pv-opp { background: linear-gradient(170deg, rgba(28, 32, 64, .85), rgba(12, 15, 34, .85)); border: 1px solid rgba(233, 196, 106, .18); }
+.theme-werewolf .pv-opp.turn { border-color: var(--ww-gold); box-shadow: 0 0 0 3px rgba(233, 196, 106, .18), 0 0 30px rgba(255, 170, 60, .25); }
+.theme-werewolf .pv-avatar { background: radial-gradient(circle at 40% 35%, #fff6dc, #d8c08a 70%, #a58a4f); box-shadow: 0 0 14px rgba(233, 196, 106, .35); }
+.theme-werewolf .pv-opp-name { font-variant: small-caps; letter-spacing: .03em; color: #f3e6c2; }
+.theme-werewolf .pv-mini { background: var(--ww-night-2) !important; border-color: #c9b27a; }
+
+/* ---------- the village square (table) */
+.theme-werewolf .pv-table { background: radial-gradient(ellipse at 50% 30%, rgba(60, 50, 90, .45), rgba(10, 12, 30, .55)); box-shadow: inset 0 0 0 1px rgba(233, 196, 106, .18), inset 0 0 60px rgba(0, 0, 0, .5); }
+.theme-werewolf .pv-whose.me { background: var(--ww-gold); color: #2b1d05; }
+.theme-werewolf .pv-zone-label { color: #e6dcc0; font-variant: small-caps; letter-spacing: .04em; }
+.theme-werewolf .pv-zone-def-nightpile .pv-zone-label::before,
+.theme-werewolf .pv-zone-def-night .pv-zone-label::before { content: '🌙 '; }
+.theme-werewolf .pv-zone-def-dayrow .pv-zone-label::before,
+.theme-werewolf .pv-zone-def-day .pv-zone-label::before { content: '☀️ '; }
+.theme-werewolf .pv-drawable { outline-color: var(--ww-gold); }
+
+/* ---------- Day and Night zones */
+.theme-werewolf .pv-my-zone.pv-zone-def-day, .theme-werewolf .pv-opp-zone.pv-zone-def-day {
+  background: linear-gradient(170deg, rgba(240, 190, 100, .22), rgba(150, 90, 40, .16)); border: 1px solid rgba(240, 190, 100, .35);
+}
+.theme-werewolf .pv-my-zone.pv-zone-def-night, .theme-werewolf .pv-opp-zone.pv-zone-def-night {
+  background: linear-gradient(170deg, rgba(40, 50, 110, .55), rgba(10, 12, 40, .6)); border: 1px solid rgba(150, 160, 240, .25);
+}
+.theme-werewolf .pv-my-zone.pv-target, .theme-werewolf .pv-opp-zone.pv-target { border-color: var(--ww-gold) !important; }
+.theme-werewolf .pv-tg-label { color: #f3e3b8; }
+.theme-werewolf .pv-tg.stacked { background: rgba(233, 196, 106, .16); border-color: var(--ww-gold); }
+.theme-werewolf .pv-tg.open, .theme-werewolf .pv-tg.loose.risk { border-color: #e56b5d; }
+
+/* ---------- me */
+.theme-werewolf .pv-me { background: linear-gradient(170deg, rgba(28, 32, 64, .88), rgba(10, 12, 30, .9)); border: 1px solid rgba(233, 196, 106, .2); }
+.theme-werewolf .pv-me.turn { border-color: var(--ww-gold); box-shadow: 0 0 30px rgba(255, 170, 60, .18); }
+.theme-werewolf .pv-chip.gold { background: var(--ww-gold); color: #2b1d05; }
+.theme-werewolf .pv-hint, .theme-werewolf .pv-target-hint { color: var(--ww-gold); }
+
+/* ---------- cards: an illustrated frame with a value gem */
+.theme-werewolf .card.face:not(.full-art) {
+  background: linear-gradient(165deg, #f8efd9 0%, #eadbb5 100%);
+  color: var(--ww-ink); font-family: var(--ww-serif);
+  border: 1px solid #5b4426;
+  box-shadow: inset 0 0 0 calc(var(--cw) * .03) #f8efd9, inset 0 0 0 calc(var(--cw) * .045) #9a7a45, 0 2px 6px rgba(0, 0, 0, .5);
+  padding: .5em .5em .45em; gap: .2em; position: relative;
+}
+.theme-werewolf .card.face .card-title {
+  margin: -.15em -.15em 0; padding: .25em .3em .25em 1.9em; border-radius: .25em; text-align: center;
+  background: linear-gradient(#4a3320, #2e1f12); color: #f3dfa6; font-variant: small-caps; letter-spacing: .03em; font-size: 1.08em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
+}
+.theme-werewolf .card.face .card-icon {
+  margin: .15em auto 0; width: 72%; aspect-ratio: 1; flex: none; border-radius: 50%; font-size: 3.4em;
+  background: radial-gradient(circle at 50% 42%, #fffaf0 0%, var(--card-bg) 55%, color-mix(in srgb, var(--card-bg) 70%, #000) 100%);
+  box-shadow: inset 0 0 0 .12em rgba(91, 68, 38, .7), inset 0 -.25em .6em rgba(0, 0, 0, .25), 0 .1em .3em rgba(0, 0, 0, .25);
+}
+.theme-werewolf .card.face .card-sub { display: none; }
+.theme-werewolf .card.face .card-rules {
+  margin-top: auto; background: rgba(255, 250, 235, .7); border: 1px solid rgba(91, 68, 38, .35); border-radius: .3em;
+  font-style: italic; text-align: center; font-size: .82em; line-height: 1.15; flex: 0 1 auto; max-height: 3.6em;
+}
+.theme-werewolf .card.face .card-stats {
+  position: absolute; top: .3em; left: .3em; margin: 0; width: 2em; height: 2em; border-radius: 50%; display: grid; place-items: center;
+  background: radial-gradient(circle at 35% 30%, #e6606a, var(--ww-blood) 60%, #4a0a0f); border: .12em solid #e9c46a;
+  box-shadow: 0 .08em .25em rgba(0, 0, 0, .5); z-index: 1;
+}
+.theme-werewolf .card.face .card-stats span { font-size: 0; }
+.theme-werewolf .card.face .card-stats b { font-size: calc(var(--cw) * .11); color: #fff3d6; line-height: 1; }
+/* the card back: the moon over the forest, with a wolf watching */
+.theme-werewolf .card.back:not(.has-image) {
+  border-color: #c9b27a; position: relative; overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 36%, #fff6d8 0 14%, #e8d49a 18%, rgba(233, 196, 106, .35) 24%, transparent 40%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 40' preserveAspectRatio='none'%3E%3Cpath d='M0 40V30l8-14 8 14 6-4 8-18 8 18 7 6 6-12 6 12 8-6 8-20 8 20 7 4 6-10 6 10v10z' fill='%23050813'/%3E%3C/svg%3E") bottom / 100% 34% no-repeat,
+    linear-gradient(170deg, #26306a, #0b1026 75%);
+}
+.theme-werewolf .card.back:not(.has-image) > * { display: none; }
+.theme-werewolf .card.back:not(.has-image)::after {
+  content: '🐺'; position: absolute; left: 50%; top: 36%; transform: translate(-50%, -50%);
+  font-size: calc(var(--cw) * .34); filter: brightness(0); opacity: .85;
+}
+.theme-werewolf .pv-card.ok { box-shadow: 0 0 0 3px var(--ww-gold), 0 2px 6px rgba(0, 0, 0, .5); }
+.theme-werewolf .pv-card.picked { box-shadow: 0 0 0 3px #fff3d6, 0 0 24px rgba(255, 200, 90, .7) !important; }
+.theme-werewolf .pv-facedown { outline-color: rgba(170, 180, 255, .7); filter: brightness(.75) saturate(.8); }
+.theme-werewolf .pv-chipcard { border-color: #5b4426; box-shadow: 0 1px 2px rgba(0, 0, 0, .5); }
+
+/* ---------- dialogs and the cheat sheet */
+.theme-werewolf .pv-cheat, .theme-werewolf .pv-banner { background: linear-gradient(170deg, #f7eed8, #e9dab4); border: 1px solid #b89a5c; font-family: var(--ww-serif); }
+.theme-werewolf .pv-cheat-head b { font-variant: small-caps; letter-spacing: .04em; font-size: 1.1em; color: #3b2414; }
+.theme-werewolf .pv-cheat-table th { color: #7a5a33; border-color: #cdb88a; }
+.theme-werewolf .pv-cheat-table td { border-color: #e2d3ad; }
+.theme-werewolf .pv-cs-name { color: #5a1a14; font-variant: small-caps; letter-spacing: .03em; }
+.theme-werewolf .pv-chipcard.any { background: #d9c9a0; }
+.theme-werewolf .modal { font-family: var(--ww-serif); }
+.theme-werewolf .toast.win { background: var(--ww-gold); color: #2b1d05; }
+
+@media (max-width: 900px) {
+  .theme-werewolf::before { top: 230px; right: 14px; width: 56px; height: 56px; opacity: .85; }
+  .theme-werewolf::after { height: 16vh; }
+}
+@media (prefers-reduced-motion: reduce) { .theme-werewolf::before { animation: none; } }

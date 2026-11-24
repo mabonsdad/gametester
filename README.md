@@ -45,6 +45,11 @@ with any mix of human and AI players.
   pauses between tricks and hands, and ends with the scores. Open it from
   the "Player view ↗" link in a project's header. Every game is saved as a
   session, with timings, so it can be reviewed in Playtest.
+  A project can choose a look for it under Rules & setup (classic felt, or a
+  moonlit werewolf village with illustrated card frames); themes live in
+  `static/js/themes.js` and `static/css/themes/`. Set-collection games get a
+  pop-up "Tricks" cheat sheet built from the game's trick rules: the cards in
+  each trick and what it scores in each zone.
 * **Share links**: on the Playtest page, "Share as a game" makes a link that
   opens only that game's player view, with no password. Each link can be
   switched off, and has a daily cap on AI turns if Claude or ChatGPT
@@ -124,6 +129,7 @@ static/              the app (vanilla JS modules, no build step)
   js/sets.js         set-collection patterns and best-combination scoring
   js/turns.js        one AI turn with retries and fallbacks (shared)
   js/player.js       the player view (play.html)
+  js/themes.js       player view looks (css/themes/<id>.css)
   js/views/          projects, cards, rules, play
 docs/PLAN.md         design, research and roadmap
 ```
