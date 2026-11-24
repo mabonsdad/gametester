@@ -127,7 +127,7 @@ html.pv-html:has(body.theme-werewolf) { background: var(--ww-night, #0b1026); }
 .theme-werewolf .card.face .card-sub { display: none; }
 .theme-werewolf .card.face .card-rules {
   margin-top: auto; background: rgba(255, 250, 235, .7); border: 1px solid rgba(91, 68, 38, .35); border-radius: .3em;
-  font-style: italic; text-align: center; font-size: .82em; line-height: 1.15; flex: 0 1 auto; max-height: 3.6em;
+  font-style: italic; text-align: center; font-size: .82em; line-height: 1.15; flex: 0 0 auto; max-height: 4.6em; padding: .2em .35em;
 }
 .theme-werewolf .card.face .card-stats {
   position: absolute; top: .3em; left: .3em; margin: 0; width: 2em; height: 2em; border-radius: 50%; display: grid; place-items: center;
