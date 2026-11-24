@@ -513,8 +513,10 @@ export function werewolfProject() {
         { id: 'potion', label: 'Potion', pattern: 'witch + villager + werewolf', points: '' },
         { id: 'lovers', label: 'Lovers', pattern: 'cupid + 2 any', points: '' },
         { id: 'pack', label: 'Pack', pattern: 'alpha wolf + 2 werewolves', points: '' },
-        { id: 'guard', label: 'Guard', pattern: 'defender + villager/seer/witch', points: '' },
+        { id: 'guard', label: 'Guard', pattern: 'defender + villager/seer/witch/sister/hunter', points: '' },
         { id: 'feast', label: 'Feast', pattern: 'vampire + 3 villagers', points: '' },
+        { id: 'sisters', label: 'Sisters', pattern: '2 sisters', points: '' },
+        { id: 'bullet', label: 'Silver Bullet', pattern: 'hunter + werewolf', points: '' },
       ],
       endWhenEmpty: 'round',
       arrange: 'auto',
@@ -537,28 +539,32 @@ export function werewolfProject() {
     scoring:
       "Only cards in a trick score. A trick is worth the sum of its cards' values - doubled in your Day tricks, single in your Night tricks. Each card counts in one trick only. Night tricks are arranged for the most points; Day tricks for the fewest lone cards.\n" +
       'Mob: 5 Villagers (5).\n' +
-      'Vision: a Seer + 3 different cards, e.g. Seer, Witch, Villager, Werewolf (9) or Seer, Seer, Werewolf, Cupid (7).\n' +
+      'Vision: a Seer + 3 different cards (every role is different: Sisters and Hunters count too), e.g. Seer, Witch, Villager, Werewolf (11) or Seer, Seer, Werewolf, Cupid (11).\n' +
       'Hunt: a Werewolf + 1 Villager (4).\n' +
       'Potion: a Witch + a Villager + a Werewolf (7).\n' +
       'Lovers: Cupid + any 2 cards (the two cards\' values).\n' +
       'Pack: the Alpha Wolf + 2 Werewolves (10).\n' +
-      'Guard: a Defender + a Villager, Seer or Witch (2, 4 or 6).\n' +
+      'Guard: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 8).\n' +
       'The Defender is wild: in any trick it is worth as much as the most valuable other card it is with, so its worth depends on what it is grouped with.\n' +
-      'Feast: a Vampire + 3 Villagers (8).',
+      'Feast: a Vampire + 3 Villagers (8).\n' +
+      'Sisters: a pair of Sisters (6).\n' +
+      'Silver Bullet: a Hunter + a Werewolf (5).',
     aiHints: 'A Day card left on its own can be stolen; a trick you finish within one turn is never at risk and scores double - for example play a Werewolf and a Villager. Look for steals that use two of your cards. Build big tricks (Mob, Feast) face down in the Night. Watch other players\' loose Day cards for tricks you can complete and take. Swap for Day cards that complete a trick.',
   };
   const card = (id, name, icon, value, count, color, description, rules) => ({
     ...blankCard(p), id, name, icon, count, color, description, rules, startZone: 'nightpile', stats: { value }, tags: ['werewolf-tricks'],
   });
   p.cards = [
-    card('villager', 'Villager', '🧑‍🌾', 1, 48, '#efe4c8', 'Value 1', 'Mob: 5 Villagers.'),
-    card('seer', 'Seer', '🔮', 2, 3, '#c9b8ee', 'Value 2', 'Vision: a Seer + 3 different cards.'),
+    card('villager', 'Villager', '🧑‍🌾', 1, 36, '#efe4c8', 'Value 1', 'Mob: 5 Villagers.'),
+    card('seer', 'Seer', '🔮', 4, 5, '#c9b8ee', 'Value 4', 'Vision: a Seer + 3 different cards.'),
     card('werewolf', 'Werewolf', '🐺', 3, 16, '#b08a6e', 'Value 3', 'Hunt: a Werewolf + 1 lone Villager.'),
     card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potion: Witch + Villager (saved) + Werewolf (killed).'),
     card('cupid', 'Cupid', '💘', 0, 3, '#f6c2d6', 'Value 0', 'Lovers: Cupid + any 2 cards.'),
     card('alpha-wolf', 'Alpha Wolf', '🌕', 4, 1, '#8c7a9e', 'Value 4', 'Pack: Alpha Wolf + 2 Werewolves.'),
-    card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Wild: worth the best card it is with', 'Guard: a Defender + a Villager, Seer or Witch.'),
+    card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Wild: worth the best card it is with', 'Guard: a Defender + a Villager, Seer, Witch, Sister or Hunter.'),
     card('vampire', 'Vampire', '🧛', 5, 4, '#d27a86', 'Value 5', 'Feast: a Vampire + 3 Villagers.'),
+    card('sister', 'Sister', '👭', 3, 4, '#f1c9a5', 'Value 3', 'Sisters: a pair of Sisters.'),
+    card('hunter', 'Hunter', '🏹', 2, 2, '#a9bf86', 'Value 2', 'Silver Bullet: a Hunter + a Werewolf.'),
   ];
   p.variants = [
     { id: 'actions', label: 'Actions per turn', description: 'How many actions each player takes on their turn.', default: 0, choices: [
