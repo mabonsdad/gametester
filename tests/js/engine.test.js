@@ -363,7 +363,7 @@ test('announcements: say it in time, get caught, automatic penalty, tracked in s
   assert.ok(describeAutomation(p).some((l) => l.includes('Announcement "Last card!"')));
 });
 
-// ------------------------------------------------------------------ set collection (werewolf_tricks)
+// ------------------------------------------------------------------ set collection (Weirdwolves)
 import { werewolfProject } from '../../static/js/model.js';
 import { setsBotTurn, setsBreakdown, zoneTricks } from '../../static/js/engine.js';
 import { bestTricks, compileSets, parsePattern } from '../../static/js/sets.js';
@@ -379,12 +379,12 @@ test('set collection: patterns and the best split into tricks', () => {
   assert.equal(score(['Seer', 'Seer', 'Werewolf', 'Cupid']), 11, 'Vision with a second Seer');
   assert.equal(score(['Seer', 'Sister', 'Hunter', 'Cupid']), 9, 'Sisters and Hunters are different roles for a Seer');
   assert.equal(score(['Sister', 'Sister']), 6, 'Sisters');
-  assert.equal(score(['Hunter', 'Werewolf']), 5, 'Silver Bullet');
+  assert.equal(score(['Hunter', 'Werewolf']), 5, 'Hunt');
   assert.equal(score(['Defender', 'Sister']), 6, 'a Defender can guard a Sister');
   assert.equal(score(['Defender', 'Hunter']), 4, 'and a Hunter');
   assert.equal(score(['Seer', 'Villager', 'Villager', 'Werewolf']), 4, 'not 3 different: only a Hunt');
   assert.equal(score(['Sister']), 0, 'one Sister alone is not a trick');
-  assert.equal(score(['Werewolf', 'Villager']), 4, 'Hunt');
+  assert.equal(score(['Werewolf', 'Villager']), 4, 'Dinner');
   assert.equal(score(['Witch', 'Villager', 'Werewolf']), 7, 'Potion');
   assert.equal(score(['Alpha Wolf', 'Werewolf', 'Werewolf']), 10, 'Pack');
   assert.equal(score(['Defender', 'Villager']), 2, 'Guard = 2 x the guarded card');
@@ -426,7 +426,7 @@ test('set collection: actions, swaps, steals, hand limit and the end of the game
   assert.equal(st.players[0].counters.score, 0, 'night points stay hidden until the end');
   // A card that completes nothing cannot be put in someone else's zone.
   const lone = card('Seer', `${a}.hand`);
-  assert.match(checkAction(p, st, { type: 'move', card: lone, to: `${b}.day`, actor: a }), /does not complete a trick/);
+  assert.match(checkAction(p, st, { type: 'move', card: lone, to: `${b}.day`, actor: a }), /does not complete a set/);
   // Swap with a face-up Day card: it takes the card's place.
   const market = st.zones.dayrow.cards[1];
   apply(p, st, { type: 'swap', card: lone, with: market, actor: a });
@@ -506,14 +506,14 @@ test('set collection: stacking protects a trick and fixes how it scores', () => 
   // A Villager from p2 no longer completes anything with p1's cards.
   const v2 = put('Villager', 'p2.hand');
   assert.ok(!legalMoves(p, st, 'p2').options.some((o) => o.kind === 'give' && o.card === v2 && o.victim === 'p1'));
-  assert.match(checkAction(p, st, { type: 'move', card: v2, to: 'p1.day', actor: 'p2' }), /stacked tricks are safe/);
+  assert.match(checkAction(p, st, { type: 'move', card: v2, to: 'p1.day', actor: 'p2' }), /stacked sets are safe/);
   // Stacking is free and checked: p2 lays a Defender and a Witch unstacked...
   const d = put('Defender', 'p2.day');
   const wi = put('Witch', 'p2.day');
   const lm2 = legalMoves(p, st, 'p2');
   const opt = lm2.options.find((o) => o.kind === 'stack');
   assert.ok(opt, 'a stack option for the unstacked Guard');
-  assert.match(checkAction(p, st, { type: 'stack', cards: [d], actor: 'p2' }), /is not a trick/);
+  assert.match(checkAction(p, st, { type: 'stack', cards: [d], actor: 'p2' }), /is not a set/);
   const before = st.hand.actionsUsed;
   apply(p, st, { ...opt.action, actor: 'p2' });
   assert.equal(st.hand.actionsUsed, before, 'stacking does not use an action');
@@ -539,7 +539,7 @@ test('set collection: Day tricks group themselves; steals can use several cards'
   };
   // A Hunt, then a Seer and a Witch: they regroup into a Vision (no lone cards).
   put('Werewolf', 'p2.day'); put('Villager', 'p2.day');
-  assert.deepEqual(zoneTricks(p, st, 'p2.day').tricks.map((t) => t.label), ['Hunt']);
+  assert.deepEqual(zoneTricks(p, st, 'p2.day').tricks.map((t) => t.label), ['Dinner']);
   put('Seer', 'p2.day'); put('Witch', 'p2.day');
   let t = zoneTricks(p, st, 'p2.day');
   assert.deepEqual(t.tricks.map((x) => x.label), ['Vision']);
@@ -564,5 +564,23 @@ test('set collection: Day tricks group themselves; steals can use several cards'
   assert.equal(st.cards[vamp].zone, 'p1.night');
   assert.equal(st.zones['p1.night'].cards.length, 4, 'Vampire + 3 Villagers taken');
   assert.equal(activePlayer(st).id, 'p2', 'two cards = two actions: the turn passed');
-  assert.match(checkAction(p, st, { type: 'steal', cards: [put('Seer', 'p2.hand')], to: 'p3.day', actor: 'p2' }), /do not complete a trick/);
+  assert.match(checkAction(p, st, { type: 'steal', cards: [put('Seer', 'p2.hand')], to: 'p3.day', actor: 'p2' }), /do not complete a set/);
+  // A steal must use at least one of the other player's cards: a Hunter and a Werewolf of your own are not a steal.
+  put('Werewolf', 'p3.day');
+  const own = [put('Hunter', 'p2.hand'), put('Werewolf', 'p2.hand')];
+  assert.match(checkAction(p, st, { type: 'steal', cards: own, to: 'p3.day', actor: 'p2' }), /do not complete a set/);
+  assert.ok(!legalMoves(p, st, 'p2').options.some((o) => o.kind === 'steal' && o.cards.length === 2 && o.cards.every((u) => own.includes(u))));
+});
+
+test('Weirdwolves: named sets, and "sets" (not "tricks") in what players read', () => {
+  const p = normalizeProject(werewolfProject());
+  assert.equal(p.name, 'Weirdwolves');
+  const labels = p.automation.sets.combos.map((c) => c.label);
+  assert.ok(labels.includes('Dinner') && labels.includes('Hunt') && !labels.includes('Silver Bullet'));
+  assert.equal(p.automation.sets.combos.find((c) => c.label === 'Hunt').pattern, 'hunter + werewolf');
+  const text = [describeAutomation(p).join(' '), Object.values(p.rules).join(' '), p.zones.map((z) => z.name).join(' '), p.cards.map((c) => c.rules).join(' ')].join(' ');
+  assert.doesNotMatch(text, /\btricks?\b/i);
+  const st = createGame(p, { players: players4.slice(0, 3), seed: 4 });
+  const lm = legalMoves(p, st, activePlayer(st).id);
+  assert.doesNotMatch([lm.summary, ...lm.options.map((o) => o.label)].join(' '), /\btricks?\b/i);
 });
