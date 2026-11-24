@@ -539,12 +539,12 @@ export function werewolfProject() {
     scoring:
       "Only cards in a set score. A set is worth the sum of its cards' values - doubled in your Day sets, single in your Night sets. Each card counts in one set only. Night sets are arranged for the most points; Day sets for the fewest lone cards.\n" +
       'Mob: 5 Villagers (5).\n' +
-      'Vision: a Seer + 3 different cards (every role is different: Sisters and Hunters count too), e.g. Seer, Witch, Villager, Werewolf (11) or Seer, Seer, Werewolf, Cupid (11).\n' +
+      'Vision: a Seer + 3 different cards (every role is different: Sisters and Hunters count too), e.g. Seer, Witch, Villager, Werewolf (9) or Seer, Seer, Werewolf, Cupid (7).\n' +
       'Dinner: a Werewolf + 1 Villager (4).\n' +
       'Potion: a Witch + a Villager + a Werewolf (7).\n' +
       'Lovers: Cupid + any 2 cards (the two cards\' values).\n' +
       'Pack: the Alpha Wolf + 2 Werewolves (10).\n' +
-      'Guard: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 8).\n' +
+      'Guard: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 6).\n' +
       'The Defender is wild: in any set it is worth as much as the most valuable other card it is with, so its worth depends on what it is grouped with.\n' +
       'Feast: a Vampire + 3 Villagers (8).\n' +
       'Sisters: a pair of Sisters (6).\n' +
@@ -556,7 +556,7 @@ export function werewolfProject() {
   });
   p.cards = [
     card('villager', 'Villager', '🧑‍🌾', 1, 36, '#efe4c8', 'Value 1', 'Mob: 5 Villagers.'),
-    card('seer', 'Seer', '🔮', 4, 5, '#c9b8ee', 'Value 4', 'Vision: a Seer + 3 different cards.'),
+    card('seer', 'Seer', '🔮', 2, 5, '#c9b8ee', 'Value 2', 'Vision: a Seer + 3 different cards.'),
     card('werewolf', 'Werewolf', '🐺', 3, 16, '#b08a6e', 'Value 3', 'Dinner: a Werewolf + 1 lone Villager.'),
     card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potion: Witch + Villager (saved) + Werewolf (killed).'),
     card('cupid', 'Cupid', '💘', 0, 3, '#f6c2d6', 'Value 0', 'Lovers: Cupid + any 2 cards.'),
