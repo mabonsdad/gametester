@@ -375,19 +375,25 @@ test('set collection: patterns and the best split into tricks', () => {
   const score = (names) => bestTricks(C, names.map((n) => p.cards.find((c) => c.name === n).id)).total;
   assert.equal(score(Array(5).fill('Villager')), 5, 'Mob');
   assert.equal(score(Array(4).fill('Villager')), 0, 'four villagers are not a trick');
-  assert.equal(score(['Seer', 'Witch', 'Villager', 'Werewolf']), 9, 'Vision: 3 different cards');
-  assert.equal(score(['Seer', 'Seer', 'Werewolf', 'Cupid']), 7, 'Vision with a second Seer');
+  assert.equal(score(['Seer', 'Witch', 'Villager', 'Werewolf']), 11, 'Vision: 3 different cards');
+  assert.equal(score(['Seer', 'Seer', 'Werewolf', 'Cupid']), 11, 'Vision with a second Seer');
+  assert.equal(score(['Seer', 'Sister', 'Hunter', 'Cupid']), 9, 'Sisters and Hunters are different roles for a Seer');
+  assert.equal(score(['Sister', 'Sister']), 6, 'Sisters');
+  assert.equal(score(['Hunter', 'Werewolf']), 5, 'Silver Bullet');
+  assert.equal(score(['Defender', 'Sister']), 6, 'a Defender can guard a Sister');
+  assert.equal(score(['Defender', 'Hunter']), 4, 'and a Hunter');
   assert.equal(score(['Seer', 'Villager', 'Villager', 'Werewolf']), 4, 'not 3 different: only a Hunt');
+  assert.equal(score(['Sister']), 0, 'one Sister alone is not a trick');
   assert.equal(score(['Werewolf', 'Villager']), 4, 'Hunt');
   assert.equal(score(['Witch', 'Villager', 'Werewolf']), 7, 'Potion');
   assert.equal(score(['Alpha Wolf', 'Werewolf', 'Werewolf']), 10, 'Pack');
   assert.equal(score(['Defender', 'Villager']), 2, 'Guard = 2 x the guarded card');
-  assert.equal(score(['Defender', 'Seer']), 4);
+  assert.equal(score(['Defender', 'Seer']), 8, 'Seer is worth 4');
   assert.equal(score(['Defender', 'Witch']), 6);
   assert.equal(score(['Vampire', 'Villager', 'Villager', 'Villager']), 8, 'Feast');
   assert.equal(score(['Cupid', 'Vampire', 'Vampire']), 10, 'Lovers score the two cards');
   assert.equal(score(['Cupid', 'Defender', 'Witch']), 6, 'a wild Defender is worth the best card it is with');
-  assert.equal(score(['Seer', 'Defender', 'Witch', 'Villager']), 9, 'Defender = Witch (3) in a Vision');
+  assert.equal(score(['Seer', 'Defender', 'Witch', 'Villager']), 12, 'Defender = Seer (4) in a Vision');
   // Each card counts once, and the best arrangement wins: Feast + Hunt beats Mob.
   assert.equal(score(['Vampire', 'Werewolf', ...Array(5).fill('Villager')]), 12);
   assert.match(parsePattern('dragon + villager', p.cards).error, /No card is called "dragon"/);
@@ -467,7 +473,7 @@ test('set collection: whole bot games keep every card and end with equal turns',
         turns[pid]++;
       }
       assert.equal(st.status, 'ended');
-      assert.equal(Object.values(st.zones).reduce((s, z) => s + z.cards.length, 0), 81);
+      assert.equal(Object.values(st.zones).reduce((s, z) => s + z.cards.length, 0), 77);
       assert.equal(st.zones.nightpile.cards.length, 0);
       assert.equal(new Set(Object.values(turns)).size, 1, `equal turns: ${JSON.stringify(turns)}`);
       for (const x of st.players) assert.equal(x.counters.score, setsBreakdown(p, st, x.id).total);
