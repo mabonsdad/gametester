@@ -190,3 +190,7 @@ html.pv-html { background: #143f30; }
   .pv-my-sets { --cw: 50px; grid-template-columns: 1fr; }
   .pv-opp-sets { max-width: none; }
 }
+.pv-tg.stacked { background: rgba(242,193,78,.16); border: 1px solid #f2c14e; }
+.pv-sets:not(.compact) .pv-tg.stacked .pv-tg-cards > .card + .card { margin-left: calc(var(--cw) * -.62); }
+.pv-tg.open { border: 1px dashed #ff9d9d; }
+.pv-stack-btn { padding: 1px 8px; font-size: 12px; }

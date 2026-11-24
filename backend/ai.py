@@ -39,6 +39,7 @@ TURN_SCHEMA = {
                     "player": _STR, "counter": _STR, "delta": {"type": "number"}, "value": {"type": "number"},
                     "choose": _STR, "id": _STR, "announce": {"type": "array", "items": _STR},
                     "winner": {"type": "array", "items": _STR}, "reason": _STR, "text": _STR,
+                    "stack": {"type": "boolean"}, "cards": {"type": "array", "items": _STR},
                 },
                 "required": ["type"],
                 "additionalProperties": False,

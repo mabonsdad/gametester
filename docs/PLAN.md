@@ -209,6 +209,12 @@ insights (score chart, lead changes, AI feelings, notes).
     * The quick bot plays a simple strategy: steal or finish a trick, start a
       trick it can finish this turn face up, build face down, swap, draw.
     * The card editor has an optional emoji icon for cards without an image.
+    * Stacking (`st.stacks`, `sets.stackZones`, default the give zone): a
+      free `stack` action, or `"stack": true` on a play, groups cards that
+      form a trick. A stack scores as that trick and cannot be used by other
+      players; unstacked cards still score in their best arrangement but can
+      be completed and taken. Wild values ("same") take the value of the best
+      other card in the trick.
   * Player options (`project.variants`): named choices that set project
     fields, picked on the player view's welcome screen.
   * Announcements: a general "say something around a play" mechanic.

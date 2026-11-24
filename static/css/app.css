@@ -379,3 +379,4 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; }
 
 /* asks for a reload after a new deploy */
 .reload-bar { position: sticky; top: 0; z-index: 90; display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 12px; background: #f2c14e; color: #2b2100; font-weight: 600; }
+.set-summary .stack-btn { margin-left: 6px; }

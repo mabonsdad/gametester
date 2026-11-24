@@ -386,6 +386,8 @@ test('set collection: patterns and the best split into tricks', () => {
   assert.equal(score(['Defender', 'Witch']), 6);
   assert.equal(score(['Vampire', 'Villager', 'Villager', 'Villager']), 8, 'Feast');
   assert.equal(score(['Cupid', 'Vampire', 'Vampire']), 10, 'Lovers score the two cards');
+  assert.equal(score(['Cupid', 'Defender', 'Witch']), 6, 'a wild Defender is worth the best card it is with');
+  assert.equal(score(['Seer', 'Defender', 'Witch', 'Villager']), 9, 'Defender = Witch (3) in a Vision');
   // Each card counts once, and the best arrangement wins: Feast + Hunt beats Mob.
   assert.equal(score(['Vampire', 'Werewolf', ...Array(5).fill('Villager')]), 12);
   assert.match(parsePattern('dragon + villager', p.cards).error, /No card is called "dragon"/);
@@ -431,7 +433,8 @@ test('set collection: actions, swaps, steals, hand limit and the end of the game
   apply(p, st, { type: 'move', card: v2, to: 'day', actor: b });
   assert.equal(st.players[1].counters.score, 8);
   const v3 = card('Villager', 'p3.hand');
-  assert.ok(!legalMoves(p, st, 'p3').options.some((o) => o.kind === 'give' && o.card === v3), 'a finished Hunt cannot be taken');
+  // An unstacked trick can still be used: p3 completes a Hunt with B's Werewolf.
+  assert.ok(legalMoves(p, st, 'p3').options.some((o) => o.kind === 'give' && o.card === v3 && o.victim === b), 'unstacked cards can be taken');
   // Hand limit: discard down to 6 before the turn passes.
   for (let i = 0; i < 6; i++) card('Villager', 'p3.hand');
   apply(p, st, { type: 'draw', actor: 'p3' });
@@ -470,4 +473,46 @@ test('set collection: whole bot games keep every card and end with equal turns',
       assert.ok(st.result.winners.length >= 1);
     }
   }
+});
+
+test('set collection: stacking protects a trick and fixes how it scores', () => {
+  const p = normalizeProject(werewolfProject());
+  const st = createGame(p, { players: players4.slice(0, 3), seed: 9 });
+  const put = (name, zone) => {
+    const u = Object.values(st.cards).find((c) => p.cards.find((d) => d.id === c.defId).name === name && !c.zone.includes('.day') && c.zone !== zone && !c.zone.includes('.hand')).uid;
+    const from = st.zones[st.cards[u].zone].cards;
+    from.splice(from.indexOf(u), 1);
+    st.zones[zone].cards.push(u);
+    st.cards[u].zone = zone;
+    return u;
+  };
+  // p1 plays a Werewolf and then a Villager with "stack": the Hunt is stacked and safe.
+  const w = put('Werewolf', 'p1.hand');
+  const v = put('Villager', 'p1.hand');
+  apply(p, st, { type: 'move', card: w, to: 'day', actor: 'p1' });
+  const lm = legalMoves(p, st, 'p1');
+  assert.ok(lm.options.some((o) => o.kind === 'play' && o.card === v && o.stack && o.gain === 8));
+  apply(p, st, { type: 'move', card: v, to: 'day', stack: true, actor: 'p1' });
+  assert.deepEqual(st.stacks['p1.day'], [[v, w]]);
+  assert.equal(st.players[0].counters.score, 8);
+  // A Villager from p2 no longer completes anything with p1's cards.
+  const v2 = put('Villager', 'p2.hand');
+  assert.ok(!legalMoves(p, st, 'p2').options.some((o) => o.kind === 'give' && o.card === v2 && o.victim === 'p1'));
+  assert.match(checkAction(p, st, { type: 'move', card: v2, to: 'p1.day', actor: 'p2' }), /stacked tricks are safe/);
+  // Stacking is free and checked: p2 lays a Defender and a Witch unstacked...
+  const d = put('Defender', 'p2.day');
+  const wi = put('Witch', 'p2.day');
+  const lm2 = legalMoves(p, st, 'p2');
+  const opt = lm2.options.find((o) => o.kind === 'stack');
+  assert.ok(opt, 'a stack option for the unstacked Guard');
+  assert.match(checkAction(p, st, { type: 'stack', cards: [d], actor: 'p2' }), /is not a trick/);
+  const before = st.hand.actionsUsed;
+  apply(p, st, { ...opt.action, actor: 'p2' });
+  assert.equal(st.hand.actionsUsed, before, 'stacking does not use an action');
+  assert.equal(st.players[1].counters.score, 12, 'Guard with a Witch: Defender worth 3, (3 + 3) x 2');
+  assert.match(checkAction(p, st, { type: 'stack', cards: [d, wi], actor: 'p2' }), /already in a stack/);
+  // A stacked Guard keeps its Defender even if a better arrangement would use it elsewhere.
+  put('Cupid', 'p2.day');
+  put('Vampire', 'p2.day');
+  assert.equal(zoneTricks(p, st, 'p2.day').total, 6, 'the Cupid has only the Vampire: no Lovers');
 });

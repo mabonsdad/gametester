@@ -11,7 +11,10 @@
 // separated by "/", "tag:<tag>", or "any". "distinct" (or "different") means
 // the cards in that slot must all be different card types.
 // A combo scores the sum of its cards' value stat, or a formula using
-// `sum` and `count` (e.g. "sum * 2").
+// `sum` and `count` (e.g. "sum * 2"). A card whose value is "same" (or
+// "wild" / "copy") is wild: in a trick it is worth as much as the most
+// valuable other card in that trick, so its worth depends on what it is
+// combined (stacked) with.
 //
 // The cards in a zone are scored as the best way of splitting them into
 // combos: each card belongs to at most one combo, cards in no combo score
@@ -72,6 +75,7 @@ export function compileSets(project, cfg) {
   const sig = JSON.stringify([valueStat, cfg.combos, project.cards.map((c) => [c.id, c.name, c.tags, c.stats?.[valueStat]])]);
   if (compiled.has(sig)) return compiled.get(sig);
   const values = Object.fromEntries(project.cards.map((c) => [c.id, Number(c.stats?.[valueStat]) || 0]));
+  const wild = new Set(project.cards.filter((c) => isWildValue(c.stats?.[valueStat])).map((c) => c.id));
   const combos = [];
   const errors = [];
   for (const [i, cb] of (cfg.combos || []).entries()) {
@@ -79,11 +83,12 @@ export function compileSets(project, cfg) {
     if (error) { errors.push(`${cb.label || `Trick ${i + 1}`}: ${error}`); continue; }
     combos.push({ id: cb.id || `combo${i + 1}`, label: cb.label || cb.pattern, points: String(cb.points || '').trim(), slots });
   }
-  const C = { combos, errors, values, cache: new Map(), ptsCache: new Map() };
+  const C = { combos, errors, values, wild, cache: new Map(), ptsCache: new Map() };
   C.pointsOf = (cb, defIds) => {
     const key = cb.id + '|' + defIds.slice().sort().join(',');
     if (C.ptsCache.has(key)) return C.ptsCache.get(key);
-    const sum = defIds.reduce((s, d) => s + (values[d] || 0), 0);
+    const top = Math.max(0, ...defIds.filter((d) => !wild.has(d)).map((d) => values[d] || 0));
+    const sum = defIds.reduce((s, d) => s + (wild.has(d) ? top : values[d] || 0), 0);
     let pts = sum;
     if (cb.points && cb.points !== 'sum') {
       try { pts = Number(runExpr(cb.points, { sum, count: defIds.length })) || 0; } catch { pts = 0; }
@@ -95,6 +100,8 @@ export function compileSets(project, cfg) {
   compiled.set(sig, C);
   return C;
 }
+
+export const isWildValue = (v) => /^(same|wild|copy|match)$/i.test(String(v ?? '').trim());
 
 // Every way to fill the combo's slots from the counts `c` (indices into
 // types) that uses at least one card of type `must`. While `cb` runs, `c`
@@ -210,4 +217,22 @@ export function assignCards(result, uids, defOf) {
   };
   const tricks = result.tricks.map((t) => ({ ...t, cards: t.defIds.map(take).filter(Boolean) }));
   return { total: result.total, tricks, loose: left };
+}
+
+// The best combo made of exactly these cards (all of them), e.g. a stack a
+// player has put together. -> { id, label, defIds, points } or null
+export function matchGroup(C, defIds) {
+  if (!defIds.length) return null;
+  const { types, idx, counts, combos } = prepare(C, defIds);
+  const must = idx.get(defIds[0]);
+  let best = null;
+  for (const x of combos) {
+    forEachFill(x.slots, counts, must, (chosen) => {
+      if (counts.some((n) => n > 0)) return; // some cards left over
+      const ids = chosen.map((i) => types[i]);
+      const pts = C.pointsOf(x.cb, ids);
+      if (pts > 0 && (!best || pts > best.points)) best = { id: x.cb.id, label: x.cb.label, defIds: ids, points: pts };
+    });
+  }
+  return best;
 }
