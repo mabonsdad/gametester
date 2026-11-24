@@ -738,6 +738,7 @@ export async function renderPlay(root, ctx, args) {
         ai ? h('button', { class: 'btn primary', disabled: !!aiBusy, onclick: runAiTurn }, `▶ Play ${p.name}'s turn`) : null,
         phases.length > 1 && !automated ? h('button', { class: 'btn', disabled: !!aiBusy || st.turn.phase >= phases.length - 1, onclick: () => commit({ type: 'phase' }) }, 'Next phase') : null,
         sets && !ai && lm?.options ? lm.options.filter((o) => o.kind === 'stack').map((o) => h('button', { class: 'btn', title: o.label, onclick: () => commit(o.action) }, `🔒 ${o.label.replace(/ so it cannot be taken$/, '')}`)) : null,
+        sets && !ai && lm?.options ? lm.options.filter((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0).slice(0, 6).map((o) => h('button', { class: 'btn', title: o.label, onclick: () => commit(o.action) }, `🗡 ${o.kind === 'steal' ? o.label.replace(/^Put /, '') : `${cardDef(project, st, o.card)?.name}: ${o.label}`}`)) : null,
         sets && !ai && lm?.canDraw && !lm.discarding ? h('button', { class: 'btn', onclick: () => commit({ type: 'draw' }) }, 'Draw a card') : null,
         sets && !ai && !lm?.discarding ? h('button', { class: `btn ${lm?.actionsLeft ? '' : 'primary'}`, onclick: () => commit({ type: 'endTurn' }) }, lm?.actionsLeft ? 'End turn early' : 'End turn') : null,
         shedding && !ai && lm?.canDraw ? h('button', { class: `btn ${lm.legal.length ? '' : 'primary'}`, onclick: () => commit({ type: 'draw' }) }, lm.takeCount ? `Take ${lm.takeCount} cards` : 'Draw a card') : null,

@@ -25,9 +25,10 @@ with any mix of human and AI players.
     trick), with tricks written as simple patterns such as
     `alpha wolf + 2 werewolves` or `seer + 3 any distinct`; each zone scores
     the best way of splitting its cards into tricks, with a multiplier per
-    zone, and face-down zones stay secret until the end; players can stack
-    a finished face-up trick (free) so it is safe and always scores as that
-    trick, and wild cards (value "same") are worth what they are with;
+    zone, and face-down zones stay secret until the end; face-up tricks are
+    either grouped automatically (fewest lone cards) or stacked by hand, and
+    are then safe; a steal can use several of your cards (one action each);
+    wild cards (value "same") are worth what they are with;
   * legal-move checking (off / warn / strict), with legal cards highlighted;
   * scoring rules and end conditions written as simple formulas, e.g.
     `max(0, teamTricks - 6)` or `othersHandSum("points")`.

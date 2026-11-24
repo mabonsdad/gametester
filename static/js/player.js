@@ -443,6 +443,7 @@ function opponent(p, winners) {
       h('span', { class: 'pv-count' }, n)),
     game.counters.length ? h('div', { class: 'pv-opp-score small' }, game.counters.map((c) => `${c.name} ${p.counters[c.id]}`).join(' · ')) : null,
     chips.length ? h('div', { class: 'pv-chips' }, chips) : null,
+    isSets(game) && st.hand ? stealButtons(p) : null,
     isSets(game) && st.hand ? oppSets(p) : null,
     thinking === p.id ? h('div', { class: 'pv-dots' }, h('span'), h('span'), h('span')) : null);
 }
@@ -488,6 +489,24 @@ function trickGroups(zid, { compact = false } = {}) {
     r.loose.length ? h('div', { class: `pv-tg loose ${cfg?.secret ? '' : 'risk'}` }, h('div', { class: 'pv-tg-cards' }, r.loose.map(card)),
       h('div', { class: 'pv-tg-label' }, cfg?.secret ? 'not in a trick yet' : own ? 'lone - others can use these' : 'lone')) : null,
     !z.cards.length ? h('div', { class: 'pv-empty' }, compact ? '-' : 'empty') : null);
+}
+
+// Every trick the human can take from this player right now: obvious buttons.
+function stealButtons(p) {
+  if (!myTurn()) return null;
+  const lm = legalMoves(game, st, HUMAN);
+  const opts = (lm?.options || []).filter((o) => (o.kind === 'give' || o.kind === 'steal') && o.victim === p.id && o.gain > 0);
+  if (!opts.length) return null;
+  const seen = new Set();
+  const uniq = opts.filter((o) => {
+    const k = `${o.combo}|${o.cards.map((u) => st.cards[u].defId).sort().join(',')}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).sort((a, b) => b.gain - a.gain).slice(0, 4);
+  return h('div', { class: 'pv-steals' }, uniq.map((o) => h('button', {
+    class: 'btn small pv-steal-btn', title: o.label, onclick: () => act(o.action),
+  }, `🗡 Take their ${o.combo || 'trick'} with `, h('span', { class: 'pv-steal-cards' }, o.cards.map(chipCard)), ` +${o.gain}${o.cards.length > 1 ? ` · ${o.cards.length} actions` : ''}`)));
 }
 
 function oppSets(p) {
@@ -657,7 +676,7 @@ function myArea() {
     actions.unshift(h('button', { class: 'btn catch-btn pv-catch', onclick: () => act({ type: 'catch' }) }, `Catch ${player(st, st.catchable.pid).name}! (didn't say "${st.catchable.label}")`));
   }
   const tip = st.status !== 'playing' ? '' : st.pending ? '' : myTurn()
-    ? (sets && lm?.options ? (lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones, a highlighted opponent, or a face-up card to swap.` : `${lm.summary} Tap a card in your hand to use it, or draw.${lm.canStack ? ' You have an unstacked trick: tap 🔒 Stack to protect it (free).' : ''}`)
+    ? (sets && lm?.options ? (lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones, a highlighted opponent, or a face-up card to swap.` : `${lm.summary} Tap a card in your hand to use it, or draw.${lm.canStack ? ' You have an unstacked trick: tap 🔒 Stack to protect it (free).' : ''}${lm.options.some((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0) ? ' 🗡 You can take a trick from another player - see the buttons on their panel.' : ''}`)
       : lm ? `${lm.summary}${lm.legal.length ? ' Tap a highlighted card to play it.' : ''}` : 'Tap a card to play it, or draw from a pile; then end your turn.')
     : 'Waiting for the other players…';
   const chips = [];
@@ -778,7 +797,9 @@ function cheatSheet() {
     h('ul', { class: 'pv-cs-notes' },
       h('li', {}, 'Only cards in a trick score; each card counts in one trick.'),
       wild.length ? h('li', {}, `${wild.map((c) => c.name).join(', ')}: wild - worth as much as the best card it is with.`) : null,
-      stackable.length ? h('li', {}, `Stack a finished trick in your ${stackable.join(' or ')} (free) so nobody can take it.`) : null,
+      stackable.length && S.arrange === 'auto' ? h('li', {}, `Your ${stackable.join(' and ')} group themselves into tricks (fewest lone cards). Tricks are safe; a lone card can be used by others.`) : null,
+      stackable.length && S.arrange !== 'auto' ? h('li', {}, `Stack a finished trick in your ${stackable.join(' or ')} (free) so nobody can take it.`) : null,
+      S.giveZone ? h('li', {}, `Steal: put cards into another player's ${zoneDef(game, S.giveZone)?.name || 'zone'} to complete a trick with their lone cards, and take it (one action per card).`) : null,
       secret.length ? h('li', {}, `${secret.join(' and ')} stay face down and are scored at the end.`) : null));
 }
 
@@ -836,6 +857,9 @@ document.addEventListener('keydown', (e) => {
   if (!st || document.querySelector('.modal-overlay')) return;
   if ((e.key === 'Enter' || e.key === ' ') && st.pending) { e.preventDefault(); continuePlay(); }
 });
+
+// "&debug=1" in the address exposes the game for automated tests.
+if (/(?:^|[#&])debug=1/.test(location.hash)) window.__pv = { get st() { return st; }, get game() { return game; }, render };
 
 boot();
 watchVersion(() => showReloadBar('A new version of this game has been published - reload to use it.'));

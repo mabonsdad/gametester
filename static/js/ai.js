@@ -69,15 +69,16 @@ export function buildSystemPrompt(project) {
      {"type":"move","card":"<your hand card id>","to":"<one of your scoring zones, e.g. ${(S.zones || []).map((z) => z.zone).join(' or ')}>"}
      {"type":"move","card":"<id>","to":"<zone>","stack":true}  also stack the trick this card completes (protects it)
      {"type":"move","card":"<your hand card id>","to":"<another player's zone, e.g. p2.${S.giveZone}>"}   only when it completes a trick there (listed in the state)
+     {"type":"steal","cards":["<id>","<id>"],"to":"<e.g. p2.${S.giveZone}>"}   put several hand cards there to complete a trick with their lone cards; one action per card
      {"type":"move","card":"<your hand card id>","to":"${S.discardZone}"}      only when you are told to discard
      {"type":"endTurn"}                                       to stop before using all your actions
-     {"type":"stack","cards":["<id>","<id>"]}                 FREE (not an action): stack your own unstacked cards that form a trick
-  ],
+${S.arrange === 'auto' ? '' : `     {"type":"stack","cards":["<id>","<id>"]}                 FREE (not an action): stack your own unstacked cards that form a trick
+`}  ],
   "winConfidence": 0-100,   // honest estimate that you will win the game from here
   "experience": "one sentence on how this turn felt from your seat (interesting choice? stuck? clever steal?)",
   "designerNotes": "rule ambiguities or design problems you noticed, or empty string"
 }
-Stacked tricks are safe; unstacked cards in a face-up zone can be used by other players to complete a trick and take it, so stack a trick as you finish it ("stack": true on the move). The turn passes automatically after your last action. If you draw a card you will be asked again for the rest of your turn (you will then see the card), so put a draw last in your list.`
+${S.arrange === 'auto' ? 'Face-up cards are grouped into tricks automatically (fewest lone cards); grouped tricks are safe, lone cards can be used by other players to complete a trick and take it.' : 'Stacked tricks are safe; unstacked cards in a face-up zone can be used by other players to complete a trick and take it, so stack a trick as you finish it ("stack": true on the move).'} The turn passes automatically after your last action. If you draw a card you will be asked again for the rest of your turn (you will then see the card), so put a draw last in your list.`
     : shedding
     ? `Reply with ONE JSON object and nothing else:
 {

@@ -222,3 +222,17 @@ html.pv-html { background: #143f30; }
   .pv-cheat-table th.num { white-space: normal; }
   .pv-cs-name { white-space: normal; }
 }
+
+/* Light panels and dialogs stay light, whatever the device's dark mode says
+   (otherwise inputs take the dark page colours: dark text on dark fields). */
+.pv-panel, .pv-cheat, .pv-banner, .pv-body .modal {
+  --bg: #f4f1ea; --surface: #fffdf8; --surface-2: #f3eee3; --ink: #1f2328; --ink-2: #5a6169; --line: #cfc6b4;
+  color: #1f2328; color-scheme: light;
+}
+.pv-body .modal { background: #fffdf8; }
+
+/* steal buttons on an opponent's panel */
+.pv-steals { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.pv-steal-btn { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: center; background: #8e1b23; color: #fff3d6; border-color: #5d0f15; animation: pv-pulse 1.6s infinite; }
+.pv-steal-cards { display: inline-flex; gap: 2px; }
+.pv-steal-cards .pv-chipcard { width: 17px; height: 23px; font-size: 11px; }

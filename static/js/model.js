@@ -99,6 +99,7 @@ export function defaultAutomation() {
       counter: 'score',
       combos: [], // { id, label, pattern: 'werewolf + villager', points: '' (sum of values) | formula using sum, count }
       endWhenEmpty: 'round', // round | now | off
+      arrange: 'manual', // stackable zones: 'auto' groups tricks automatically, 'manual' = players stack them
     },
     announcements: [], // { id, label, check, when, ifMissed, penaltyDraw, penaltyCounter, penaltyAmount, aiCatch, remind }
     scoring: [], // { event, who, counter, expr, when, label }
@@ -516,10 +517,11 @@ export function werewolfProject() {
         { id: 'feast', label: 'Feast', pattern: 'vampire + 3 villagers', points: '' },
       ],
       endWhenEmpty: 'round',
+      arrange: 'auto',
     },
   };
   p.rules = {
-    overview: 'A village by Day, a hunt by Night. Collect cards and lay them in front of you as tricks: sets that match the rule printed on a card.\nDay tricks are laid face up and score double. Stack a finished Day trick to make it safe: until then another player can complete a trick with your unstacked cards and take it.\nNight tricks are laid face down: they are safe, score single points and stay secret until the end.',
+    overview: 'A village by Day, a hunt by Night. Collect cards and lay them in front of you as tricks: sets that match the rule printed on a card.\nDay tricks are laid face up and score double. Your Day cards group themselves into tricks; finished tricks are safe, but a card left on its own can be used by another player to complete a trick - which they then take.\nNight tricks are laid face down: they are safe, score single points and stay secret until the end.',
     objective: 'Have the most points when the Night pile runs out.',
     turnRules:
       'Setup: everyone gets 3 cards. Four cards are turned face up as the Day cards; the rest form the Night pile.\n' +
@@ -528,12 +530,12 @@ export function werewolfProject() {
       '2. Swap a card from your hand for one of the Day cards (yours takes its place).\n' +
       '3. Play a card face up to your Day tricks.\n' +
       '4. Play a card face down to your Night tricks.\n' +
-      "5. Put a card into another player's Day tricks if it completes a trick with their unstacked cards - you take that whole trick, face down, to your Night tricks.\n" +
-      'Stacking (free, any time on your turn): stack cards in your Day tricks that form a trick. A stack is safe - nobody can take it - and always scores as that trick. Unstacked cards can be used by other players, even if they already make a trick.\n' +
+      "5. Steal: put cards from your hand into another player's Day tricks so that, together with their lone cards, they complete a trick - you take that whole trick, face down, to your Night tricks. Each card you put down is one action (e.g. two Villagers next to their Vampire and Villager make a Feast: two actions).\n" +
+      'Your Day cards are grouped into tricks automatically, leaving as few cards alone as possible (and, if there is a choice, the least valuable ones). Grouped tricks are safe.\n' +
       'At the end of your turn you may hold at most 6 cards: discard any extra.',
     endGame: 'When the Night pile runs out, play continues until everyone has had the same number of turns. Then the Night tricks are revealed, and the highest total wins.',
     scoring:
-      "Only cards in a trick score. A trick is worth the sum of its cards' values - doubled in your Day tricks, single in your Night tricks. Each card counts in one trick only. A stack scores as the trick it was stacked as; for all other cards the app finds the best arrangement.\n" +
+      "Only cards in a trick score. A trick is worth the sum of its cards' values - doubled in your Day tricks, single in your Night tricks. Each card counts in one trick only. Night tricks are arranged for the most points; Day tricks for the fewest lone cards.\n" +
       'Mob: 5 Villagers (5).\n' +
       'Vision: a Seer + 3 different cards, e.g. Seer, Witch, Villager, Werewolf (9) or Seer, Seer, Werewolf, Cupid (7).\n' +
       'Hunt: a Werewolf + 1 Villager (4).\n' +
@@ -541,9 +543,9 @@ export function werewolfProject() {
       'Lovers: Cupid + any 2 cards (the two cards\' values).\n' +
       'Pack: the Alpha Wolf + 2 Werewolves (10).\n' +
       'Guard: a Defender + a Villager, Seer or Witch (2, 4 or 6).\n' +
-      'The Defender is wild: in any trick it is worth as much as the most valuable other card it is with, so its worth depends on what it is stacked with.\n' +
+      'The Defender is wild: in any trick it is worth as much as the most valuable other card it is with, so its worth depends on what it is grouped with.\n' +
       'Feast: a Vampire + 3 Villagers (8).',
-    aiHints: 'Stack every Day trick you finish (free) - unstacked cards can be stolen. A trick you finish and stack within one turn is never at risk and scores double - for example play a Werewolf, then play the Villager with "stack": true. Build big tricks (Mob, Feast) face down in the Night. Watch other players\' loose Day cards for tricks you can complete and take. Swap for Day cards that complete a trick.',
+    aiHints: 'A Day card left on its own can be stolen; a trick you finish within one turn is never at risk and scores double - for example play a Werewolf and a Villager. Look for steals that use two of your cards. Build big tricks (Mob, Feast) face down in the Night. Watch other players\' loose Day cards for tricks you can complete and take. Swap for Day cards that complete a trick.',
   };
   const card = (id, name, icon, value, count, color, description, rules) => ({
     ...blankCard(p), id, name, icon, count, color, description, rules, startZone: 'nightpile', stats: { value }, tags: ['werewolf-tricks'],
@@ -566,6 +568,10 @@ export function werewolfProject() {
     { id: 'daymult', label: 'Day tricks score', description: 'The reward for risking a face-up trick.', default: 0, choices: [
       { label: 'Double', set: { 'automation.sets.zones.0.multiplier': 2 } },
       { label: 'Triple', set: { 'automation.sets.zones.0.multiplier': 3 } },
+    ] },
+    { id: 'arrange', label: 'Day tricks', description: 'How your face-up cards become tricks.', default: 0, choices: [
+      { label: 'Grouped automatically (fewest lone cards)', set: { 'automation.sets.arrange': 'auto' } },
+      { label: 'Stack them yourself', set: { 'automation.sets.arrange': 'manual' } },
     ] },
     { id: 'end', label: 'When the Night pile runs out', description: 'How the game ends.', default: 0, choices: [
       { label: 'Finish the round (everyone gets equal turns)', set: { 'automation.sets.endWhenEmpty': 'round' } },
