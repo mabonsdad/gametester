@@ -244,7 +244,8 @@ export function matchGroup(C, defIds) {
 }
 
 // The most valuable single combo that uses ALL of `extras` together with some
-// of `pool` (cards put into another player's zone to complete a trick there).
+// of `pool` - at least one - (cards put into another player's zone to complete
+// a trick there).
 // -> { id, label, defIds, points } or null
 export function bestTrickUsing(C, pool, extras) {
   if (!extras.length) return null;
@@ -260,6 +261,7 @@ export function bestTrickUsing(C, pool, extras) {
       const have = {};
       for (const d of defIds) have[d] = (have[d] || 0) + 1;
       if (Object.entries(need).some(([d, n]) => (have[d] || 0) < n)) return;
+      if (defIds.length <= extras.length) return; // must use at least one card from the pool
       const pts = C.pointsOf(x.cb, defIds);
       if (pts > 0 && (!best || pts > best.points)) best = { id: x.cb.id, label: x.cb.label, defIds, points: pts };
     });

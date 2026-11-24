@@ -196,7 +196,7 @@ insights (score chart, lead changes, AI feelings, notes).
   * Stacking draw cards (off / same size / any).
   * Player view and share links for testing with real players.
   * Set-collection style (`automation.sets`, `static/js/sets.js`) and the
-    werewolf_tricks sample:
+    Weirdwolves sample:
     * N actions per turn: draw, swap with a face-up market card, play to one
       of your own scoring zones, or complete a trick with another player's
       loose cards and take it; a hand limit with discards at the end of a turn.
@@ -215,7 +215,7 @@ insights (score chart, lead changes, AI feelings, notes).
       players; unstacked cards still score in their best arrangement but can
       be completed and taken. Wild values ("same") take the value of the best
       other card in the trick.
-    * `sets.arrange: 'auto'` (werewolf_tricks' default): face-up zones group
+    * `sets.arrange: 'auto'` (Weirdwolves' default): face-up zones group
       themselves for the fewest lone cards (then the least valuable lone
       cards, then points); every trick is safe.
     * A `steal` action puts several hand cards into another player's zone to

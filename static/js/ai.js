@@ -51,7 +51,7 @@ export function buildSystemPrompt(project) {
   const sets = isSets(project);
   const S = sets ? setsCfg(project) : null;
   const harness = sets
-    ? 'The harness runs the mechanics listed under "Automated by the harness": it checks that each action is legal, works out the best arrangement of every zone into tricks, keeps the score, passes the turn after your actions and ends the game. You only choose your actions.'
+    ? 'The harness runs the mechanics listed under "Automated by the harness": it checks that each action is legal, works out the best arrangement of every zone into sets, keeps the score, passes the turn after your actions and ends the game. You only choose your actions.'
     : shedding
     ? 'The harness runs the mechanics listed under "Automated by the harness": it checks that your move is legal, applies card effects, passes the turn, deals new rounds' + (A.autoScore ? ', keeps the score' : '') + ' and ends the game. You only choose what to play (or to draw).'
     : tricks
@@ -67,18 +67,18 @@ export function buildSystemPrompt(project) {
      {"type":"draw"}                                          draw from the ${S.drawZone}
      {"type":"swap","card":"<your hand card id>","with":"<face-up card id in ${S.marketZone}>"}
      {"type":"move","card":"<your hand card id>","to":"<one of your scoring zones, e.g. ${(S.zones || []).map((z) => z.zone).join(' or ')}>"}
-     {"type":"move","card":"<id>","to":"<zone>","stack":true}  also stack the trick this card completes (protects it)
-     {"type":"move","card":"<your hand card id>","to":"<another player's zone, e.g. p2.${S.giveZone}>"}   only when it completes a trick there (listed in the state)
-     {"type":"steal","cards":["<id>","<id>"],"to":"<e.g. p2.${S.giveZone}>"}   put several hand cards there to complete a trick with their lone cards; one action per card
+     {"type":"move","card":"<id>","to":"<zone>","stack":true}  also stack the set this card completes (protects it)
+     {"type":"move","card":"<your hand card id>","to":"<another player's zone, e.g. p2.${S.giveZone}>"}   only when it completes a set there (listed in the state)
+     {"type":"steal","cards":["<id>","<id>"],"to":"<e.g. p2.${S.giveZone}>"}   put several hand cards there to complete a set with their lone cards; one action per card
      {"type":"move","card":"<your hand card id>","to":"${S.discardZone}"}      only when you are told to discard
      {"type":"endTurn"}                                       to stop before using all your actions
-${S.arrange === 'auto' ? '' : `     {"type":"stack","cards":["<id>","<id>"]}                 FREE (not an action): stack your own unstacked cards that form a trick
+${S.arrange === 'auto' ? '' : `     {"type":"stack","cards":["<id>","<id>"]}                 FREE (not an action): stack your own unstacked cards that form a set
 `}  ],
   "winConfidence": 0-100,   // honest estimate that you will win the game from here
   "experience": "one sentence on how this turn felt from your seat (interesting choice? stuck? clever steal?)",
   "designerNotes": "rule ambiguities or design problems you noticed, or empty string"
 }
-${S.arrange === 'auto' ? 'Face-up cards are grouped into tricks automatically (fewest lone cards); grouped tricks are safe, lone cards can be used by other players to complete a trick and take it.' : 'Stacked tricks are safe; unstacked cards in a face-up zone can be used by other players to complete a trick and take it, so stack a trick as you finish it ("stack": true on the move).'} The turn passes automatically after your last action. If you draw a card you will be asked again for the rest of your turn (you will then see the card), so put a draw last in your list.`
+${S.arrange === 'auto' ? 'Face-up cards are grouped into sets automatically (fewest lone cards); grouped sets are safe, lone cards can be used by other players to complete a set and take it.' : 'Stacked sets are safe; unstacked cards in a face-up zone can be used by other players to complete a set and take it, so stack a set as you finish it ("stack": true on the move).'} The turn passes automatically after your last action. If you draw a card you will be asked again for the rest of your turn (you will then see the card), so put a draw last in your list.`
     : shedding
     ? `Reply with ONE JSON object and nothing else:
 {
@@ -189,10 +189,10 @@ ${wilds.length ? `For a wild card, add "choose" with one of: ${lm.colours.join('
     const lm = legalMoves(project, st, pid);
     const nmList = (uids) => uids.length ? uids.map(nm).join(', ') : 'none';
     const zoneText = (pidZ, z, mineView) => {
-      const tricks = z.tricks.map((t) => `${t.stacked ? 'STACKED ' : ''}${t.label} [${t.cards.join(' ')}] = ${t.points}`).join('; ') || 'no tricks';
+      const tricks = z.tricks.map((t) => `${t.stacked ? 'STACKED ' : ''}${t.label} [${t.cards.join(' ')}] = ${t.points}`).join('; ') || 'no sets';
       const lone = z.tricks.filter((t) => !t.stacked).flatMap((t) => t.cards).concat(z.loose);
-      const risk = !z.secret && lone.length ? (mineView ? ' (UNSTACKED, at risk: others can complete tricks with these - stack your tricks)' : ' (unstacked: you may be able to complete a trick with these)') : '';
-      return `${z.name} (×${z.multiplier}${z.secret ? ', face down' : ''}): ${tricks}; cards in no trick: ${nmList(z.loose)}${risk} → ${z.points} points`;
+      const risk = !z.secret && lone.length ? (mineView ? ' (UNSTACKED, at risk: others can complete sets with these - stack your sets)' : ' (unstacked: you may be able to complete a set with these)') : '';
+      return `${z.name} (×${z.multiplier}${z.secret ? ', face down' : ''}): ${tricks}; cards in no set: ${nmList(z.loose)}${risk} → ${z.points} points`;
     };
     const mine = setsBreakdown(project, st, pid);
     const others = st.players.filter((o) => o.id !== pid).map((o) => {
@@ -207,10 +207,10 @@ Actions left this turn: ${lm.actionsLeft ?? 0} of ${S.actions}. ${deck?.name || 
 ${lm.summary}
 Your hand (${(st.zones[`${pid}.hand`]?.cards || []).length}, limit ${S.handLimit || 'none'}): ${nmList(st.zones[`${pid}.hand`]?.cards || [])}
 Face-up cards you can swap with (${st.zones[S.marketZone]?.name || S.marketZone}): ${nmList(st.zones[S.marketZone]?.cards || [])}
-Your tricks (the best arrangement, worked out by the harness):
+Your sets (the best arrangement, worked out by the harness):
 ${mine.zones.map((z) => '- ' + zoneText(pid, z, true)).join('\n')}
 Your points: ${mine.public} showing${mine.hidden ? ` + ${mine.hidden} hidden in face-down zones` : ''} = ${mine.total}.
-Other players' tricks:
+Other players' sets:
 ${others}
 ${stacks.length ? `Free stacks you can make now (recommended):\n${stacks.join('\n')}\n` : ''}${hits.length ? `Moves that score straight away:\n${hits.join('\n')}\n` : 'No single move scores straight away.\n'}`;
   } else if (isTricks(project) && st.hand) {

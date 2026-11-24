@@ -27,7 +27,7 @@ export async function renderProjects(root, ctx) {
           h('button', { class: 'btn', onclick: () => create(sampleProject()) }, 'Sample: Harbour Lights (free-form)'),
           h('button', { class: 'btn', onclick: () => create(whistProject()) }, 'Sample: Whist (automated rules)'),
           h('button', { class: 'btn', onclick: () => create(switchbackProject()) }, 'Sample: Switchback (shedding)'),
-          h('button', { class: 'btn', onclick: () => create(werewolfProject()) }, 'Sample: werewolf_tricks (set collection)'),
+          h('button', { class: 'btn', onclick: () => create(werewolfProject()) }, 'Sample: Weirdwolves (set collection)'),
           h('button', { class: 'btn primary', onclick: newProject }, '+ New project'))));
       return;
     }
@@ -61,7 +61,7 @@ export async function renderProjects(root, ctx) {
       h('option', { value: 'sample' }, 'Copy of the sample game (Harbour Lights)'),
       h('option', { value: 'whist' }, 'Classic Whist (trick-taking, legal moves and scoring automated)'),
       h('option', { value: 'switchback' }, 'Switchback (shedding: match colour or value, action cards, round scoring)'),
-      h('option', { value: 'werewolf' }, 'werewolf_tricks (set collection: actions per turn, face-up market, best-combination scoring)'));
+      h('option', { value: 'werewolf' }, 'Weirdwolves (set collection: actions per turn, face-up market, best-combination scoring)'));
     modal('New project', h('div', { class: 'stack' },
       field('Name', name),
       field('Description', desc),

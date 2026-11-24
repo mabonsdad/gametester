@@ -226,7 +226,7 @@ function catchUp(from, quiet = false) {
     if (!quiet && e.type === 'stack' && e.actor === HUMAN) toast(`🔒 ${e.data.combo} stacked - nobody can take it now.`, 'info', 2500);
     else if (!quiet && e.type === 'steal' && e.actor === HUMAN) toast(`🎉 You completed ${player(st, e.data.victim).name}'s ${e.data.combo} and took it!${e.data.gain ? ` +${e.data.gain}` : ''}`, 'win', 3500);
     else if (!quiet && e.type === 'steal' && e.data?.victim === HUMAN) toast(`😱 ${player(st, e.actor).name} completed your ${e.data.combo} and took it!`, 'warn', 4000);
-    else if (!quiet && e.type === 'play' && e.actor === HUMAN && e.data?.gain > 0) toast(e.data.combo ? `🎉 ${e.data.combo} complete! +${e.data.gain}` : `🎉 Your tricks improved: +${e.data.gain}`, 'win', 3000);
+    else if (!quiet && e.type === 'play' && e.actor === HUMAN && e.data?.gain > 0) toast(e.data.combo ? `🎉 ${e.data.combo} complete! +${e.data.gain}` : `🎉 Your sets improved: +${e.data.gain}`, 'win', 3000);
     else if (!quiet && e.type === 'final') toast(e.text, 'info', 4500);
   }
   if (!quiet) celebrate();
@@ -417,7 +417,7 @@ function topBar() {
     h('div', { class: 'pv-top-title' }, h('b', {}, game.name), h('span', { class: 'muted' }, where)),
     h('div', { class: 'pv-scores', title: c0?.name }, c0 ? h('span', { class: 'muted small' }, `${c0.name}:`) : null, scores),
     h('div', { class: 'pv-top-btns' },
-      isSets(game) ? h('button', { class: `btn small ${cheatOpen ? 'primary' : ''}`, onclick: toggleCheat, title: 'Which cards make which tricks, and what they score' }, '📜 Tricks') : null,
+      isSets(game) ? h('button', { class: `btn small ${cheatOpen ? 'primary' : ''}`, onclick: toggleCheat, title: 'Which cards make which sets, and what they score' }, '📜 Sets') : null,
       h('button', { class: 'btn small', onclick: showRules, title: 'Rules' }, '? Rules'),
       h('button', { class: 'btn small', onclick: menu, title: 'Menu' }, '☰')));
 }
@@ -481,13 +481,13 @@ function trickGroups(zid, { compact = false } = {}) {
     r.tricks.map((t) => {
       const o = stackOpts.find((x) => x.cards.length === t.cards.length && x.cards.every((u) => t.cards.includes(u)));
       const open = !t.stacked && canStackHere;
-      return h('div', { class: `pv-tg ${t.stacked ? 'stacked' : ''} ${open ? 'open' : ''}`, title: t.stacked ? 'Stacked: safe, and it always scores as this trick' : open ? 'Not stacked: other players can use these cards' : '' },
+      return h('div', { class: `pv-tg ${t.stacked ? 'stacked' : ''} ${open ? 'open' : ''}`, title: t.stacked ? 'Stacked: safe, and it always scores as this set' : open ? 'Not stacked: other players can use these cards' : '' },
         h('div', { class: 'pv-tg-cards' }, t.cards.map(card)),
         h('div', { class: 'pv-tg-label' }, `${t.stacked ? '🔒 ' : ''}${t.label} ${pts(t)}${open && !o ? ' · not stacked' : ''}`),
         o ? h('button', { class: 'btn small pv-stack-btn', onclick: (e) => { e.stopPropagation(); act(o.action); }, title: o.label }, '🔒 Stack') : null);
     }),
     r.loose.length ? h('div', { class: `pv-tg loose ${cfg?.secret ? '' : 'risk'}` }, h('div', { class: 'pv-tg-cards' }, r.loose.map(card)),
-      h('div', { class: 'pv-tg-label' }, cfg?.secret ? 'not in a trick yet' : own ? 'lone - others can use these' : 'lone')) : null,
+      h('div', { class: 'pv-tg-label' }, cfg?.secret ? 'not in a set yet' : own ? 'lone - others can use these' : 'lone')) : null,
     !z.cards.length ? h('div', { class: 'pv-empty' }, compact ? '-' : 'empty') : null);
 }
 
@@ -506,7 +506,7 @@ function stealButtons(p) {
   }).sort((a, b) => b.gain - a.gain).slice(0, 4);
   return h('div', { class: 'pv-steals' }, uniq.map((o) => h('button', {
     class: 'btn small pv-steal-btn', title: o.label, onclick: () => act(o.action),
-  }, `🗡 Take their ${o.combo || 'trick'} with `, h('span', { class: 'pv-steal-cards' }, o.cards.map(chipCard)), ` +${o.gain}${o.cards.length > 1 ? ` · ${o.cards.length} actions` : ''}`)));
+  }, `🗡 Take their ${o.combo || 'set'} with `, h('span', { class: 'pv-steal-cards' }, o.cards.map(chipCard)), ` +${o.gain}${o.cards.length > 1 ? ` · ${o.cards.length} actions` : ''}`)));
 }
 
 function oppSets(p) {
@@ -676,7 +676,7 @@ function myArea() {
     actions.unshift(h('button', { class: 'btn catch-btn pv-catch', onclick: () => act({ type: 'catch' }) }, `Catch ${player(st, st.catchable.pid).name}! (didn't say "${st.catchable.label}")`));
   }
   const tip = st.status !== 'playing' ? '' : st.pending ? '' : myTurn()
-    ? (sets && lm?.options ? (lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones, a highlighted opponent, or a face-up card to swap.` : `${lm.summary} Tap a card in your hand to use it, or draw.${lm.canStack ? ' You have an unstacked trick: tap 🔒 Stack to protect it (free).' : ''}${lm.options.some((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0) ? ' 🗡 You can take a trick from another player - see the buttons on their panel.' : ''}`)
+    ? (sets && lm?.options ? (lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones, a highlighted opponent, or a face-up card to swap.` : `${lm.summary} Tap a card in your hand to use it, or draw.${lm.canStack ? ' You have an unstacked set: tap 🔒 Stack to protect it (free).' : ''}${lm.options.some((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0) ? ' 🗡 You can take a set from another player - see the buttons on their panel.' : ''}`)
       : lm ? `${lm.summary}${lm.legal.length ? ' Tap a highlighted card to play it.' : ''}` : 'Tap a card to play it, or draw from a pile; then end your turn.')
     : 'Waiting for the other players…';
   const chips = [];
@@ -781,10 +781,10 @@ function cheatSheet() {
   const wild = game.cards.filter((c) => isWildValue(c.stats?.[S.valueStat || 'value']));
   const stackable = (Array.isArray(S.stackZones) ? S.stackZones : S.giveZone ? [S.giveZone] : []).map((z) => zoneDef(game, z)?.name).filter(Boolean);
   const secret = zones.filter((z) => z.secret).map((z) => zoneDef(game, z.zone).name);
-  return h('aside', { class: 'pv-cheat', role: 'dialog', 'aria-label': 'Tricks and scores' },
-    h('div', { class: 'pv-cheat-head' }, h('b', {}, '📜 Tricks & scores'), h('button', { class: 'icon-btn', onclick: toggleCheat, title: 'Close' }, '✕')),
+  return h('aside', { class: 'pv-cheat', role: 'dialog', 'aria-label': 'Sets and scores' },
+    h('div', { class: 'pv-cheat-head' }, h('b', {}, '📜 Sets & scores'), h('button', { class: 'icon-btn', onclick: toggleCheat, title: 'Close' }, '✕')),
     h('table', { class: 'pv-cheat-table' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Trick'), h('th', {}, 'Cards'), zones.map((z) => h('th', { class: 'num' }, `${zoneDef(game, z.zone).name} ×${Number(z.multiplier) || 1}`)))),
+      h('thead', {}, h('tr', {}, h('th', {}, 'Set'), h('th', {}, 'Cards'), zones.map((z) => h('th', { class: 'num' }, `${zoneDef(game, z.zone).name} ×${Number(z.multiplier) || 1}`)))),
       h('tbody', {}, C.combos.map((cb) => {
         const r = trickPoints(C, cb);
         return h('tr', {},
@@ -795,11 +795,11 @@ function cheatSheet() {
     h('div', { class: 'pv-cs-values' }, h('span', { class: 'muted small' }, 'Card values:'),
       game.cards.map((c) => h('span', { class: 'pv-cs-value' }, chip(c.id), h('span', {}, isWildValue(c.stats?.[S.valueStat || 'value']) ? 'wild' : String(c.stats?.[S.valueStat || 'value'] ?? 0))))),
     h('ul', { class: 'pv-cs-notes' },
-      h('li', {}, 'Only cards in a trick score; each card counts in one trick.'),
+      h('li', {}, 'Only cards in a set score; each card counts in one set.'),
       wild.length ? h('li', {}, `${wild.map((c) => c.name).join(', ')}: wild - worth as much as the best card it is with.`) : null,
-      stackable.length && S.arrange === 'auto' ? h('li', {}, `Your ${stackable.join(' and ')} group themselves into tricks (fewest lone cards). Tricks are safe; a lone card can be used by others.`) : null,
-      stackable.length && S.arrange !== 'auto' ? h('li', {}, `Stack a finished trick in your ${stackable.join(' or ')} (free) so nobody can take it.`) : null,
-      S.giveZone ? h('li', {}, `Steal: put cards into another player's ${zoneDef(game, S.giveZone)?.name || 'zone'} to complete a trick with their lone cards, and take it (one action per card).`) : null,
+      stackable.length && S.arrange === 'auto' ? h('li', {}, `Your ${stackable.join(' and ')} group themselves into sets (fewest lone cards). Sets are safe; a lone card can be used by others.`) : null,
+      stackable.length && S.arrange !== 'auto' ? h('li', {}, `Stack a finished set in your ${stackable.join(' or ')} (free) so nobody can take it.`) : null,
+      S.giveZone ? h('li', {}, `Steal: put cards into another player's ${zoneDef(game, S.giveZone)?.name || 'zone'} to complete a set with their lone cards, and take it (one action per card).`) : null,
       secret.length ? h('li', {}, `${secret.join(' and ')} stay face down and are scored at the end.`) : null));
 }
 

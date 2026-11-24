@@ -30,7 +30,7 @@ export const STYLES = {
   free: 'Free-form: any card can go anywhere; players apply the rules',
   tricks: 'Trick-taking: play one card to a trick; highest wins (Whist, Hearts, Spades…)',
   shedding: 'Shedding: match the colour or value of the top card; first to empty their hand wins',
-  sets: 'Set collection: lay sets ("tricks") in front of you; a few actions per turn; best combination scores',
+  sets: 'Set collection: lay sets in front of you; a few actions per turn; best combination scores',
 };
 export const SETS_END = {
   round: 'When the draw pile runs out, finish the round (equal turns), then end',
@@ -466,14 +466,14 @@ export function switchbackProject() {
 }
 
 
-// ------------------------------------------------------------------ werewolf_tricks
+// ------------------------------------------------------------------ Weirdwolves
 // Set collection with a werewolf theme: lay tricks face up (Day, double
 // points, but others can finish them and take them) or face down (Night,
 // safe and secret).
 export function werewolfProject() {
-  const p = blankProject('werewolf_tricks');
+  const p = blankProject('Weirdwolves');
   p.theme = 'werewolf';
-  p.description = 'Collect village and werewolf cards and lay them as tricks: face up by Day for double points (but others can finish and steal them), or face down by Night, safe and secret. Two actions a turn; most points when the Night pile runs out wins.';
+  p.description = 'Collect village and werewolf cards and lay them as sets: face up by Day for double points (but others can finish and steal them), or face down by Night, safe and secret. Two actions a turn; most points when the Night pile runs out wins.';
   p.players = { min: 3, max: 4, default: 4 };
   p.cardBack = { color: '#1f2540', image: null, label: 'NIGHT' };
   p.zones = [
@@ -481,8 +481,8 @@ export function werewolfProject() {
     { id: 'dayrow', name: 'Day cards', scope: 'shared', layout: 'spread', faceUp: true, visibility: 'public' },
     { id: 'discard', name: 'Discard pile', scope: 'shared', layout: 'stack', faceUp: true, visibility: 'public' },
     { id: 'hand', name: 'Hand', scope: 'player', layout: 'hand', faceUp: true, visibility: 'owner', builtin: true },
-    { id: 'day', name: 'Day tricks', scope: 'player', layout: 'spread', faceUp: true, visibility: 'public' },
-    { id: 'night', name: 'Night tricks', scope: 'player', layout: 'spread', faceUp: false, visibility: 'owner' },
+    { id: 'day', name: 'Day sets', scope: 'player', layout: 'spread', faceUp: true, visibility: 'public' },
+    { id: 'night', name: 'Night sets', scope: 'player', layout: 'spread', faceUp: false, visibility: 'owner' },
   ];
   p.counters = [{ id: 'score', name: 'Points', start: 0 }];
   p.setup = [
@@ -509,73 +509,73 @@ export function werewolfProject() {
       combos: [
         { id: 'mob', label: 'Mob', pattern: '5 villagers', points: '' },
         { id: 'vision', label: 'Vision', pattern: 'seer + 3 any distinct', points: '' },
-        { id: 'hunt', label: 'Hunt', pattern: 'werewolf + villager', points: '' },
+        { id: 'hunt', label: 'Dinner', pattern: 'werewolf + villager', points: '' },
         { id: 'potion', label: 'Potion', pattern: 'witch + villager + werewolf', points: '' },
         { id: 'lovers', label: 'Lovers', pattern: 'cupid + 2 any', points: '' },
         { id: 'pack', label: 'Pack', pattern: 'alpha wolf + 2 werewolves', points: '' },
         { id: 'guard', label: 'Guard', pattern: 'defender + villager/seer/witch/sister/hunter', points: '' },
         { id: 'feast', label: 'Feast', pattern: 'vampire + 3 villagers', points: '' },
         { id: 'sisters', label: 'Sisters', pattern: '2 sisters', points: '' },
-        { id: 'bullet', label: 'Silver Bullet', pattern: 'hunter + werewolf', points: '' },
+        { id: 'bullet', label: 'Hunt', pattern: 'hunter + werewolf', points: '' },
       ],
       endWhenEmpty: 'round',
       arrange: 'auto',
     },
   };
   p.rules = {
-    overview: 'A village by Day, a hunt by Night. Collect cards and lay them in front of you as tricks: sets that match the rule printed on a card.\nDay tricks are laid face up and score double. Your Day cards group themselves into tricks; finished tricks are safe, but a card left on its own can be used by another player to complete a trick - which they then take.\nNight tricks are laid face down: they are safe, score single points and stay secret until the end.',
+    overview: 'A village by Day, a hunt by Night. Collect cards and lay them in front of you as sets: groups of cards that match the rule printed on a card.\nDay sets are laid face up and score double. Your Day cards group themselves into sets; finished sets are safe, but a card left on its own can be used by another player to complete a set - which they then take.\nNight sets are laid face down: they are safe, score single points and stay secret until the end.',
     objective: 'Have the most points when the Night pile runs out.',
     turnRules:
       'Setup: everyone gets 3 cards. Four cards are turned face up as the Day cards; the rest form the Night pile.\n' +
       'On your turn take two actions (the same one twice is fine):\n' +
       '1. Draw a card from the Night pile.\n' +
       '2. Swap a card from your hand for one of the Day cards (yours takes its place).\n' +
-      '3. Play a card face up to your Day tricks.\n' +
-      '4. Play a card face down to your Night tricks.\n' +
-      "5. Steal: put cards from your hand into another player's Day tricks so that, together with their lone cards, they complete a trick - you take that whole trick, face down, to your Night tricks. Each card you put down is one action (e.g. two Villagers next to their Vampire and Villager make a Feast: two actions).\n" +
-      'Your Day cards are grouped into tricks automatically, leaving as few cards alone as possible (and, if there is a choice, the least valuable ones). Grouped tricks are safe.\n' +
+      '3. Play a card face up to your Day sets.\n' +
+      '4. Play a card face down to your Night sets.\n' +
+      "5. Steal: put cards from your hand into another player's Day sets so that, together with their lone cards, they complete a set - you take that whole set, face down, to your Night sets. Each card you put down is one action (e.g. two Villagers next to their Vampire and Villager make a Feast: two actions).\n" +
+      'Your Day cards are grouped into sets automatically, leaving as few cards alone as possible (and, if there is a choice, the least valuable ones). Grouped sets are safe.\n' +
       'At the end of your turn you may hold at most 6 cards: discard any extra.',
-    endGame: 'When the Night pile runs out, play continues until everyone has had the same number of turns. Then the Night tricks are revealed, and the highest total wins.',
+    endGame: 'When the Night pile runs out, play continues until everyone has had the same number of turns. Then the Night sets are revealed, and the highest total wins.',
     scoring:
-      "Only cards in a trick score. A trick is worth the sum of its cards' values - doubled in your Day tricks, single in your Night tricks. Each card counts in one trick only. Night tricks are arranged for the most points; Day tricks for the fewest lone cards.\n" +
+      "Only cards in a set score. A set is worth the sum of its cards' values - doubled in your Day sets, single in your Night sets. Each card counts in one set only. Night sets are arranged for the most points; Day sets for the fewest lone cards.\n" +
       'Mob: 5 Villagers (5).\n' +
       'Vision: a Seer + 3 different cards (every role is different: Sisters and Hunters count too), e.g. Seer, Witch, Villager, Werewolf (11) or Seer, Seer, Werewolf, Cupid (11).\n' +
-      'Hunt: a Werewolf + 1 Villager (4).\n' +
+      'Dinner: a Werewolf + 1 Villager (4).\n' +
       'Potion: a Witch + a Villager + a Werewolf (7).\n' +
       'Lovers: Cupid + any 2 cards (the two cards\' values).\n' +
       'Pack: the Alpha Wolf + 2 Werewolves (10).\n' +
       'Guard: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 8).\n' +
-      'The Defender is wild: in any trick it is worth as much as the most valuable other card it is with, so its worth depends on what it is grouped with.\n' +
+      'The Defender is wild: in any set it is worth as much as the most valuable other card it is with, so its worth depends on what it is grouped with.\n' +
       'Feast: a Vampire + 3 Villagers (8).\n' +
       'Sisters: a pair of Sisters (6).\n' +
-      'Silver Bullet: a Hunter + a Werewolf (5).',
-    aiHints: 'A Day card left on its own can be stolen; a trick you finish within one turn is never at risk and scores double - for example play a Werewolf and a Villager. Look for steals that use two of your cards. Build big tricks (Mob, Feast) face down in the Night. Watch other players\' loose Day cards for tricks you can complete and take. Swap for Day cards that complete a trick.',
+      'Hunt: a Hunter + a Werewolf (5).',
+    aiHints: 'A Day card left on its own can be stolen; a set you finish within one turn is never at risk and scores double - for example play a Werewolf and a Villager. Look for steals that use two of your cards. Build big sets (Mob, Feast) face down in the Night. Watch other players\' loose Day cards for sets you can complete and take. Swap for Day cards that complete a set.',
   };
   const card = (id, name, icon, value, count, color, description, rules) => ({
-    ...blankCard(p), id, name, icon, count, color, description, rules, startZone: 'nightpile', stats: { value }, tags: ['werewolf-tricks'],
+    ...blankCard(p), id, name, icon, count, color, description, rules, startZone: 'nightpile', stats: { value }, tags: ['werewolf-sets'],
   });
   p.cards = [
     card('villager', 'Villager', '🧑‍🌾', 1, 36, '#efe4c8', 'Value 1', 'Mob: 5 Villagers.'),
     card('seer', 'Seer', '🔮', 4, 5, '#c9b8ee', 'Value 4', 'Vision: a Seer + 3 different cards.'),
-    card('werewolf', 'Werewolf', '🐺', 3, 16, '#b08a6e', 'Value 3', 'Hunt: a Werewolf + 1 lone Villager.'),
+    card('werewolf', 'Werewolf', '🐺', 3, 16, '#b08a6e', 'Value 3', 'Dinner: a Werewolf + 1 lone Villager.'),
     card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potion: Witch + Villager (saved) + Werewolf (killed).'),
     card('cupid', 'Cupid', '💘', 0, 3, '#f6c2d6', 'Value 0', 'Lovers: Cupid + any 2 cards.'),
     card('alpha-wolf', 'Alpha Wolf', '🌕', 4, 1, '#8c7a9e', 'Value 4', 'Pack: Alpha Wolf + 2 Werewolves.'),
     card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Wild: worth the best card it is with', 'Guard: a Defender + a Villager, Seer, Witch, Sister or Hunter.'),
     card('vampire', 'Vampire', '🧛', 5, 4, '#d27a86', 'Value 5', 'Feast: a Vampire + 3 Villagers.'),
     card('sister', 'Sister', '👭', 3, 4, '#f1c9a5', 'Value 3', 'Sisters: a pair of Sisters.'),
-    card('hunter', 'Hunter', '🏹', 2, 2, '#a9bf86', 'Value 2', 'Silver Bullet: a Hunter + a Werewolf.'),
+    card('hunter', 'Hunter', '🏹', 2, 2, '#a9bf86', 'Value 2', 'Hunt: a Hunter + a Werewolf.'),
   ];
   p.variants = [
     { id: 'actions', label: 'Actions per turn', description: 'How many actions each player takes on their turn.', default: 0, choices: [
       { label: '2 actions (standard)', set: { 'automation.sets.actions': 2 } },
       { label: '3 actions (faster game)', set: { 'automation.sets.actions': 3 } },
     ] },
-    { id: 'daymult', label: 'Day tricks score', description: 'The reward for risking a face-up trick.', default: 0, choices: [
+    { id: 'daymult', label: 'Day sets score', description: 'The reward for risking a face-up set.', default: 0, choices: [
       { label: 'Double', set: { 'automation.sets.zones.0.multiplier': 2 } },
       { label: 'Triple', set: { 'automation.sets.zones.0.multiplier': 3 } },
     ] },
-    { id: 'arrange', label: 'Day tricks', description: 'How your face-up cards become tricks.', default: 0, choices: [
+    { id: 'arrange', label: 'Day sets', description: 'How your face-up cards become sets.', default: 0, choices: [
       { label: 'Grouped automatically (fewest lone cards)', set: { 'automation.sets.arrange': 'auto' } },
       { label: 'Stack them yourself', set: { 'automation.sets.arrange': 'manual' } },
     ] },

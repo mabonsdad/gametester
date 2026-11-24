@@ -539,10 +539,10 @@ export async function renderPlay(root, ctx, args) {
         const stackOpts = lm?.options && !isAI(activePlayer(st).controller) ? lm.options.filter((o) => o.kind === 'stack' && o.zone === zid) : [];
         const openTricks = !sc.secret && r.tricks.some((t) => !t.stacked);
         el.append(h('div', { class: 'set-summary small' },
-          r.tricks.length ? r.tricks.map((t) => `${t.stacked ? '🔒' : ''}${t.label} ${t.points}`).join(' · ') : 'no tricks yet',
+          r.tricks.length ? r.tricks.map((t) => `${t.stacked ? '🔒' : ''}${t.label} ${t.points}`).join(' · ') : 'no sets yet',
           ` → ${r.total}${m !== 1 ? ` ×${m} = ${r.total * m}` : ''} pts`,
           r.loose.length ? h('span', { class: 'muted' }, ` · ${r.loose.length} lone`) : null,
-          openTricks && r.stacks.length + r.tricks.length ? h('span', { class: 'muted' }, ' · unstacked tricks can be taken') : null,
+          openTricks && r.stacks.length + r.tricks.length ? h('span', { class: 'muted' }, ' · unstacked sets can be taken') : null,
           stackOpts.map((o) => h('button', { class: 'mini stack-btn', title: o.label, onclick: () => commit(o.action) }, `🔒 Stack ${o.label.match(/the (\S+(?: \S+)?) in/)?.[1] || ''}`))));
       } else if (sc && z.cards.length) {
         el.append(h('div', { class: 'set-summary small muted' }, 'face down - scored at the end'));
@@ -725,7 +725,7 @@ export async function renderPlay(root, ctx, args) {
         view.mode === 'overhead' ? h('span', { class: 'muted small', title: 'Points in face-down zones, scored at the end' }, `Hidden: ${st.players.map((x) => `${x.name} ${setsBreakdown(project, st, x.id).hidden}`).join(', ')}`) : null) : null,
       lm ? h('div', { class: 'you-can' }, h('b', {}, `${p.name}: `), lm.summary,
         ai ? null : h('span', { class: 'muted small' }, sets
-          ? ' Select a card in the hand to see its options, or drag it: to a zone (a Day drop also stacks the trick it completes), onto a face-up card (swap) or into another player\'s zone (to complete and take a trick). Stacking is free.'
+          ? ' Select a card in the hand to see its options, or drag it: to a zone (a Day drop also stacks the set it completes), onto a face-up card (swap) or into another player\'s zone (to complete and take a set). Stacking is free.'
           : ` Legal cards are outlined in green: double-click one, or select it and press Play (or Enter).${shedding && lm.canDraw ? ' Click the draw pile to draw.' : ''}`)) : null,
       tricks && st.lastTrick ? h('div', { class: 'last-trick small' },
         `Last trick: ${player(st, st.lastTrick.winner).name} won with ${cname(st.lastTrick.winningCard)} - `,

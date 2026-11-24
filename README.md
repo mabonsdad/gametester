@@ -33,7 +33,7 @@ with any mix of human and AI players.
   * scoring rules and end conditions written as simple formulas, e.g.
     `max(0, teamTricks - 6)` or `othersHandSum("points")`.
 
-  See the Whist, Switchback and werewolf_tricks samples.
+  See the Whist, Switchback and Weirdwolves samples.
 * **Pauses**: optionally stop after each trick and after each hand or round,
   so the result can be read; the game-over screen shows the final standings
   and has a "Play again" button.
