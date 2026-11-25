@@ -439,7 +439,10 @@ function opponent(p, winners) {
     h('div', { class: 'pv-avatar', style: { '--hue': (p.seat * 67) % 360 } }, avatars[p.id] || '🙂'),
     h('div', { class: 'pv-opp-name' }, p.name, partner ? h('span', { class: 'muted small' }, ' (partner)') : null),
     h('div', { class: 'pv-opp-hand', title: `${n} card${n === 1 ? '' : 's'}` },
-      Array.from({ length: fan }, (_, i) => h('span', { class: 'pv-mini', style: { '--i': i, '--n': fan, background: game.cardBack.color } })),
+      Array.from({ length: fan }, (_, i) => h('span', {
+        class: `pv-mini ${game.cardBack.image ? 'art' : ''}`,
+        style: game.cardBack.image ? { '--i': i, '--n': fan, backgroundImage: `url("${String(game.cardBack.image).replace(/"/g, '%22')}")` } : { '--i': i, '--n': fan, background: game.cardBack.color },
+      })),
       h('span', { class: 'pv-count' }, n)),
     game.counters.length ? h('div', { class: 'pv-opp-score small' }, game.counters.map((c) => `${c.name} ${p.counters[c.id]}`).join(' · ')) : null,
     chips.length ? h('div', { class: 'pv-chips' }, chips) : null,

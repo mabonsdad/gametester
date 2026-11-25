@@ -249,3 +249,5 @@ html.pv-html { background: #143f30; }
 .pv-cardinfo-stats b { font-size: 20px; }
 .pv-cardinfo-rules { font-size: 17px; font-style: italic; }
 @media (max-width: 600px) { .pv-cardinfo-card .card { --cw: 190px; } }
+
+.pv-mini.art { background-size: 100% 100%; background-color: transparent; border: none; }

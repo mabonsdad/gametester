@@ -76,7 +76,7 @@ html.pv-html:has(body.theme-werewolf) { background: var(--ww-night, #0b1026); }
 .theme-werewolf .pv-opp.turn { border-color: var(--ww-gold); box-shadow: 0 0 0 3px rgba(233, 196, 106, .18), 0 0 30px rgba(255, 170, 60, .25); }
 .theme-werewolf .pv-avatar { background: radial-gradient(circle at 40% 35%, #fff6dc, #d8c08a 70%, #a58a4f); box-shadow: 0 0 14px rgba(233, 196, 106, .35); }
 .theme-werewolf .pv-opp-name { font-variant: small-caps; letter-spacing: .03em; color: #f3e6c2; }
-.theme-werewolf .pv-mini { background: var(--ww-night-2) !important; border-color: #c9b27a; }
+.theme-werewolf .pv-mini:not(.art) { background: var(--ww-night-2) !important; border-color: #c9b27a; }
 
 /* ---------- the village square (table) */
 .theme-werewolf .pv-table { background: radial-gradient(ellipse at 50% 30%, rgba(60, 50, 90, .45), rgba(10, 12, 30, .55)); box-shadow: inset 0 0 0 1px rgba(233, 196, 106, .18), inset 0 0 60px rgba(0, 0, 0, .5); }
