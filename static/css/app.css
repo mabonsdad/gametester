@@ -135,6 +135,8 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; }
 .card-title.overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: .4em; background: linear-gradient(transparent, rgba(0,0,0,.7)); color: #fff; }
 .card.back { background: var(--back); border: calc(var(--cw) * .05) solid #fff; background-size: cover; background-position: center; display: grid; place-items: center; }
 .card.back:not(.has-image) { background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.08) 0 6px, transparent 6px 12px); }
+/* an image card back is the whole design (frame included) */
+.card.back.has-image { border: none; background-size: 100% 100%; background-color: transparent; }
 .back-label { color: var(--card-ink); font-weight: 700; font-size: .8em; text-align: center; letter-spacing: .05em; padding: .3em; transform: rotate(-30deg); opacity: .85; }
 .card.empty-slot { border: 2px dashed rgba(255,255,255,.3); box-shadow: none; background: transparent; }
 

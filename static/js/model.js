@@ -567,7 +567,7 @@ export function werewolfProject() {
     card('hunter', 'Hunter', '🏹', 2, 2, '#a9bf86', 'Value 2', 'Hunt: a Hunter + a Werewolf.'),
   ];
   // Finished card art (name, value and text are in the picture).
-  for (const id of ['villager', 'hunter', 'defender', 'witch', 'cupid']) {
+  for (const id of ['villager', 'seer', 'werewolf', 'witch', 'cupid', 'alpha-wolf', 'defender', 'vampire', 'sister', 'hunter']) {
     const c = p.cards.find((x) => x.id === id);
     c.image = `img/weirdwolves/${id}.webp`;
     c.imageMode = 'card';
