@@ -558,7 +558,7 @@ export function werewolfProject() {
     card('villager', 'Villager', '🧑‍🌾', 1, 36, '#efe4c8', 'Value 1', 'Mob: 5 Villagers.'),
     card('seer', 'Seer', '🔮', 2, 5, '#c9b8ee', 'Value 2', 'Vision: a Seer + 3 different cards.'),
     card('werewolf', 'Werewolf', '🐺', 3, 16, '#b08a6e', 'Value 3', 'Dinner: a Werewolf + 1 lone Villager.'),
-    card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potions: Witch + Villager (saved) + Werewolf (killed).'),
+    card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potions: Witch + Villager (saved) + Werewolf (poisoned).'),
     card('cupid', 'Cupid', '💘', 0, 3, '#f6c2d6', 'Value 0', 'Lovers: Cupid + any 2 cards.'),
     card('alpha-wolf', 'Alpha Wolf', '🌕', 4, 1, '#8c7a9e', 'Value 4', 'Pack: Alpha Wolf + 2 Werewolves.'),
     card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Wild: worth the best card it is with', 'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter.'),
