@@ -464,10 +464,10 @@ function chipCard(u) {
   return el;
 }
 
-// A small card: its art if it has some, else its icon or initials.
+// A small card: its icon (clearest at this size), else its art, else initials.
 function defChip(d) {
   if (!d) return h('span', { class: 'pv-chipcard' }, '?');
-  const art = d.image && (d.imageMode === 'card' || d.imageMode === 'full');
+  const art = !d.icon && d.image && (d.imageMode === 'card' || d.imageMode === 'full');
   return h('span', {
     class: `pv-chipcard ${art ? 'art' : ''}`, title: cardText(d),
     style: art ? { backgroundImage: `url("${String(d.image).replace(/"/g, '%22')}")` } : { background: d.color },
