@@ -24,6 +24,12 @@ const app = document.getElementById('app');
 const HUMAN = 'p1';
 let theme = themeOf(null); // the look (themes.js): opponents, words, stylesheet
 let cheatOpen = false;
+// The list of what everyone did is a panel the player opens and closes; the
+// choice is remembered. feedSeen counts the entries they have already seen.
+const FEED_KEY = 'cgtb.player.feedOpen';
+let feedOpen = (() => { try { return localStorage.getItem(FEED_KEY) === '1'; } catch { return false; } })();
+let feedTotal = 0;
+let feedSeen = 0;
 const PROVIDERS = {
   random: { label: 'Quick bots', note: 'instant moves, simple tactics' },
   anthropic: { label: 'Claude', note: 'thinks for a few seconds each turn' },
@@ -186,6 +192,7 @@ function start() {
   tele('start', { opponents: n - 1, ai: choices.provider, choices: picksText, viewport: `${innerWidth}x${innerHeight}` });
   pushFeed({ text: `New game: ${choices.name} against ${opp.map((o) => o[0]).join(', ')}.`, kind: 'sys' });
   catchUp(0, true);
+  feedSeen = feedTotal;
   save(true);
   render();
   advance();
@@ -211,6 +218,8 @@ function save(now = false) {
 function pushFeed(item) {
   feed.unshift({ ...item, t: Date.now() });
   feed = feed.slice(0, 60);
+  feedTotal++;
+  if (feedOpen) feedSeen = feedTotal;
 }
 
 // Turn new public log entries into feed lines and speech bubbles.
@@ -219,7 +228,9 @@ function catchUp(from, quiet = false) {
     if (e.type === 'assess' || e.data?.kind === 'reasoning' || e.data?.kind === 'feedback') continue;
     if (e.type === 'setup' || e.type === 'shuffle' || e.type === 'pause') continue;
     if (e.actor === 'system' && e.type === 'note') continue; // harness warnings stay in the test bench log
-    const text = e.actor === HUMAN ? e.text : e.publicText; // your own moves in full
+    // Your own moves in full. The engine names you "You", so "You's" reads as "your".
+    let text = (e.actor === HUMAN ? e.text : e.publicText).replace(/\bYou's\b/g, 'your');
+    if (e.actor === HUMAN && /^You\b/.test(text)) text = text.replace(/\btheir\b/g, 'your');
     const kind = ['trick', 'hand', 'endGame', 'trump', 'score', 'steal'].includes(e.type) ? 'big' : ['penalty', 'announce', 'final'].includes(e.type) ? 'alert' : e.actor === HUMAN ? 'me' : 'play';
     pushFeed({ text, kind, actor: e.actor });
     if (player(st, e.actor) && ['play', 'draw', 'pass', 'announce', 'move', 'endTurn', 'swap', 'steal', 'give', 'discard', 'stack'].includes(e.type)) bubbles[e.actor] = text.replace(new RegExp(`^${escapeRe(player(st, e.actor).name)}:?\\s*`), '');
@@ -393,13 +404,14 @@ function colourHex(colour) {
 function render() {
   if (!st) return;
   const winners = st.result?.winners || [];
-  app.replaceChildren(h('div', { class: 'pv' },
+  if (feedOpen) feedSeen = feedTotal;
+  app.replaceChildren(h('div', { class: `pv ${feedOpen ? 'feed-open' : ''}` },
     topBar(),
     h('div', { class: 'pv-main' },
       h('div', { class: 'pv-opps' }, st.players.filter((p) => p.id !== HUMAN).map((p) => opponent(p, winners))),
       tableArea(),
       myArea()),
-    feedPanel(),
+    feedOpen ? feedPanel() : null,
     cheatOpen && isSets(game) ? cheatSheet() : null));
 }
 
@@ -418,6 +430,7 @@ function topBar() {
     h('div', { class: 'pv-scores', title: c0?.name }, c0 ? h('span', { class: 'muted small' }, `${c0.name}:`) : null, scores),
     h('div', { class: 'pv-top-btns' },
       isSets(game) ? h('button', { class: `btn small ${cheatOpen ? 'primary' : ''}`, onclick: toggleCheat, title: 'Which cards make which sets, and what they score' }, '📜 Sets') : null,
+      feedButton(),
       h('button', { class: 'btn small', onclick: showRules, title: 'Rules' }, '? Rules'),
       h('button', { class: 'btn small', onclick: menu, title: 'Menu' }, '☰')));
 }
@@ -788,9 +801,23 @@ function sortHand(cards) {
   return cards.slice().sort((a, b) => key(a)[0] - key(b)[0] || key(a)[1] - key(b)[1]);
 }
 
+function feedButton() {
+  const unread = feedOpen ? 0 : feedTotal - feedSeen;
+  return h('button', {
+    class: `btn small pv-feed-btn ${feedOpen ? 'primary' : ''}`, onclick: toggleFeed, 'aria-expanded': String(feedOpen),
+    title: feedOpen ? `Hide the ${theme.feedTitle.toLowerCase()}` : `Show the ${theme.feedTitle.toLowerCase()}: what everyone has done`,
+  }, `📖 ${theme.feedShort}`, unread > 0 ? h('span', { class: 'pv-unread', title: `${unread} new` }, unread > 9 ? '9+' : String(unread)) : null);
+}
+
+function toggleFeed() {
+  feedOpen = !feedOpen;
+  try { localStorage.setItem(FEED_KEY, feedOpen ? '1' : '0'); } catch { /* ignore */ }
+  render();
+}
+
 function feedPanel() {
-  return h('aside', { class: 'pv-feed' },
-    h('h3', {}, theme.feedTitle),
+  return h('aside', { class: 'pv-feed', 'aria-label': theme.feedTitle },
+    h('div', { class: 'pv-feed-head' }, h('h3', {}, theme.feedTitle), h('button', { class: 'icon-btn', onclick: toggleFeed, title: 'Close' }, '✕')),
     h('ol', {}, feed.slice(0, 30).map((f) => h('li', { class: `pv-f-${f.kind}` }, f.text))));
 }
 

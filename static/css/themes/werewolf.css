@@ -65,7 +65,8 @@ html.pv-html:has(body.theme-werewolf) { background: var(--ww-night, #0b1026); }
 .theme-werewolf .pv-top-title b { color: var(--ww-gold); font-variant: small-caps; letter-spacing: .05em; font-size: 1.1em; }
 .theme-werewolf .pv-score { background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .12); }
 .theme-werewolf .pv-score.mine { background: var(--ww-gold); color: #2b1d05; }
-.theme-werewolf .pv-feed { background: rgba(5, 7, 20, .6); border-left: 1px solid rgba(233, 196, 106, .18); position: relative; z-index: 1; }
+.theme-werewolf .pv-feed { background: rgba(5, 7, 20, .6); border-left: 1px solid rgba(233, 196, 106, .18); position: sticky; z-index: 1; }
+@media (max-width: 1199px) { .theme-werewolf .pv-feed { position: fixed; z-index: 50; background: #0c1028; } }
 .theme-werewolf .pv-feed h3 { color: var(--ww-gold); font-variant: small-caps; letter-spacing: .05em; }
 .theme-werewolf .pv-feed li { background: rgba(255, 255, 255, .04); }
 .theme-werewolf .pv-f-big { color: var(--ww-gold); }
