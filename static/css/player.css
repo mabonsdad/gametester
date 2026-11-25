@@ -236,3 +236,16 @@ html.pv-html { background: #143f30; }
 .pv-steal-btn { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: center; background: #8e1b23; color: #fff3d6; border-color: #5d0f15; animation: pv-pulse 1.6s infinite; }
 .pv-steal-cards { display: inline-flex; gap: 2px; }
 .pv-steal-cards .pv-chipcard { width: 17px; height: 23px; font-size: 11px; }
+
+/* card art chips, the picked card's text and the card info view */
+.pv-chipcard.art { background-size: 100% 100%; background-color: transparent; border-color: rgba(0,0,0,.35); }
+.pv-info { cursor: zoom-in; }
+.pv-picked { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.18); border-radius: 10px; padding: 6px 10px; font-size: 15px; }
+.pv-picked .pv-chipcard { width: 26px; height: 35px; }
+.pv-cardinfo { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
+.pv-cardinfo-card .card { --cw: 240px; }
+.pv-cardinfo-text { flex: 1 1 200px; font-size: 16px; line-height: 1.4; }
+.pv-cardinfo-stats { display: flex; gap: 12px; }
+.pv-cardinfo-stats b { font-size: 20px; }
+.pv-cardinfo-rules { font-size: 17px; font-style: italic; }
+@media (max-width: 600px) { .pv-cardinfo-card .card { --cw: 190px; } }

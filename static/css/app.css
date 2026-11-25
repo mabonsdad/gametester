@@ -131,6 +131,7 @@ label.inline { display: inline-flex; align-items: center; gap: 4px; }
 .card-rules { font-size: .88em; line-height: 1.2; overflow: hidden; flex: 1 1 auto; background: rgba(255,255,255,.35); border-radius: .3em; padding: .25em .35em; white-space: pre-wrap; }
 .card-stats { display: flex; flex-wrap: wrap; gap: .25em .6em; font-size: .85em; margin-top: auto; }
 .card.full-art { background-size: cover; background-position: center; padding: 0; }
+.card.face.full-art.art-only { background-size: 100% 100%; background-color: transparent; border: none; }
 .card-title.overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: .4em; background: linear-gradient(transparent, rgba(0,0,0,.7)); color: #fff; }
 .card.back { background: var(--back); border: calc(var(--cw) * .05) solid #fff; background-size: cover; background-position: center; display: grid; place-items: center; }
 .card.back:not(.has-image) { background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.08) 0 6px, transparent 6px 12px); }

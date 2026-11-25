@@ -121,12 +121,26 @@ function inkFor(hex) {
 
 const cssUrl = (u) => `url("${String(u).replace(/"/g, '%22')}")`;
 
+const isWildStat = (v) => /^(same|wild|copy|match)$/i.test(String(v));
+
+// A card's name, stats and rules as one line of plain text (tooltips, info).
+export function cardText(def) {
+  const stats = Object.entries(def.stats || {}).map(([k, v]) => `${k} ${isWildStat(v) ? 'wild' : v}`).join(', ');
+  return `${def.name || ''}${stats ? ` (${stats})` : ''}${def.rules ? ` - ${def.rules}` : def.description ? ` - ${def.description}` : ''}`;
+}
+
 // Render a card face from its definition.
+//   imageMode 'art'  - picture in the frame, with title and text
+//   imageMode 'full' - the image fills the card, with the title over it
+//   imageMode 'card' - the image is the whole finished card (name, text and all)
 export function cardFace(def, { size, extraClass = '' } = {}) {
   const style = { '--card-bg': def.color || '#f4efe3', '--card-ink': inkFor(def.color) };
   if (size) style['--cw'] = size + 'px';
+  if (def.image && def.imageMode === 'card') {
+    return h('div', { class: `card face full-art art-only ${extraClass}`, style: { ...style, backgroundImage: cssUrl(def.image) }, title: cardText(def), role: 'img', 'aria-label': cardText(def) });
+  }
   if (def.image && def.imageMode === 'full') {
-    return h('div', { class: `card face full-art ${extraClass}`, style: { ...style, backgroundImage: cssUrl(def.image) }, title: def.name },
+    return h('div', { class: `card face full-art ${extraClass}`, style: { ...style, backgroundImage: cssUrl(def.image) }, title: cardText(def) },
       h('div', { class: 'card-title overlay' }, def.name));
   }
   if ((def.tags || []).includes('playing-card') && !def.image) {
@@ -150,12 +164,12 @@ export function cardFace(def, { size, extraClass = '' } = {}) {
       h('div', { class: 'cc-corner bottom' }, big));
   }
   const stats = Object.entries(def.stats || {});
-  return h('div', { class: `card face ${extraClass}`, style, title: def.name },
+  return h('div', { class: `card face ${extraClass}`, style, title: cardText(def) },
     h('div', { class: 'card-title' }, def.name || 'Untitled'),
     def.image ? h('div', { class: 'card-art', style: { backgroundImage: cssUrl(def.image) } }) : def.icon ? h('div', { class: 'card-icon' }, def.icon) : null,
     def.description ? h('div', { class: 'card-sub' }, def.description) : null,
     def.rules ? h('div', { class: 'card-rules' }, def.rules) : null,
-    stats.length ? h('div', { class: 'card-stats' }, stats.map(([k, v]) => h('span', {}, h('b', { title: /^(same|wild|copy|match)$/i.test(String(v)) ? 'wild: worth the best card it is with' : null }, /^(same|wild|copy|match)$/i.test(String(v)) ? '★' : v), ' ', k))) : null,
+    stats.length ? h('div', { class: 'card-stats' }, stats.map(([k, v]) => h('span', {}, h('b', { title: isWildStat(v) ? 'wild: worth the best card it is with' : null }, isWildStat(v) ? '★' : v), ' ', k))) : null,
   );
 }
 

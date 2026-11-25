@@ -566,6 +566,12 @@ export function werewolfProject() {
     card('sister', 'Sister', '👭', 3, 4, '#f1c9a5', 'Value 3', 'Sisters: a pair of Sisters.'),
     card('hunter', 'Hunter', '🏹', 2, 2, '#a9bf86', 'Value 2', 'Hunt: a Hunter + a Werewolf.'),
   ];
+  // Finished card art (name, value and text are in the picture).
+  for (const id of ['villager', 'hunter', 'defender', 'witch', 'cupid']) {
+    const c = p.cards.find((x) => x.id === id);
+    c.image = `img/weirdwolves/${id}.webp`;
+    c.imageMode = 'card';
+  }
   p.variants = [
     { id: 'actions', label: 'Actions per turn', description: 'How many actions each player takes on their turn.', default: 0, choices: [
       { label: '2 actions (standard)', set: { 'automation.sets.actions': 2 } },
