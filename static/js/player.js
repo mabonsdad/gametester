@@ -15,7 +15,7 @@ import {
 } from './engine.js';
 import { SUITS, applyVariants, normalizeProject, uid, zoneDef } from './model.js';
 import { finishTurn, rollAiCatch, takeAiTurn } from './turns.js';
-import { cardBack, cardFace, h, modal, toast } from './ui.js';
+import { cardBack, cardFace, cardText, h, modal, toast } from './ui.js';
 import { showReloadBar, watchVersion } from './version.js';
 import { applyTheme, themeOf } from './themes.js';
 import { compileSets, isWildValue } from './sets.js';
@@ -456,8 +456,56 @@ const selOptions = () => (sel && myTurn() ? (legalMoves(game, st, HUMAN)?.option
 function chipCard(u) {
   const d = cardDef(game, st, u);
   if (!isVisibleTo(game, st, u, HUMAN) || !d) return h('span', { class: 'pv-chipcard back', style: { background: game.cardBack.color } });
-  return h('span', { class: 'pv-chipcard', style: { background: d.color }, title: `${d.name}${d.rules ? ' - ' + d.rules : ''}` }, d.icon || d.name.slice(0, 2));
+  const el = defChip(d);
+  el.addEventListener('click', (e) => { if (!e.currentTarget.closest('.pv-target')) { e.stopPropagation(); showCardInfo(d); } });
+  return el;
 }
+
+// A small card: its art if it has some, else its icon or initials.
+function defChip(d) {
+  if (!d) return h('span', { class: 'pv-chipcard' }, '?');
+  const art = d.image && (d.imageMode === 'card' || d.imageMode === 'full');
+  return h('span', {
+    class: `pv-chipcard ${art ? 'art' : ''}`, title: cardText(d),
+    style: art ? { backgroundImage: `url("${String(d.image).replace(/"/g, '%22')}")` } : { background: d.color },
+  }, art ? '' : d.icon || d.name.slice(0, 2));
+}
+
+// The picked-up card's text, readable whatever the card art looks like.
+function pickedInfo(d) {
+  if (!d) return null;
+  const v = d.stats?.[setsCfg(game).valueStat || 'value'];
+  return h('div', { class: 'pv-picked' },
+    defChip(d),
+    h('b', {}, d.name),
+    v != null ? h('span', { class: 'pv-chip gold' }, /^(same|wild|copy|match)$/i.test(String(v)) ? 'wild' : `value ${v}`) : null,
+    d.rules ? h('span', {}, d.rules) : null);
+}
+
+// Everything about a card, readable on any screen (tap a card to see it).
+function showCardInfo(d) {
+  if (!d) return;
+  tele('cardInfo', { card: d.name });
+  const stats = Object.entries(d.stats || {});
+  const dlg = modal(d.name, h('div', { class: 'pv-cardinfo' },
+    h('div', { class: 'pv-cardinfo-card' }, cardFace(d, { size: 240 })),
+    h('div', { class: 'pv-cardinfo-text' },
+      stats.length ? h('p', { class: 'pv-cardinfo-stats' }, stats.map(([k, v]) => h('span', {}, `${k.charAt(0).toUpperCase()}${k.slice(1)}: `, h('b', {}, /^(same|wild|copy|match)$/i.test(String(v)) ? 'wild (worth the best card it is with)' : String(v))))) : null,
+      d.rules ? h('p', { class: 'pv-cardinfo-rules' }, d.rules) : null,
+      d.description && !/^Value \d+$/.test(d.description) ? h('p', { class: 'muted' }, d.description) : null)),
+  [{ label: 'Close', kind: 'primary' }]);
+  dlg.el.classList.add('pv-modal');
+}
+const infoOnClick = (el, d) => {
+  el.addEventListener('click', (e) => {
+    const t = e.currentTarget;
+    if (e.defaultPrevented || t.closest('.pv-target') || t.classList.contains('pv-drawable')) return; // a click that does something else
+    e.stopPropagation();
+    showCardInfo(d);
+  });
+  el.classList.add('pv-info');
+  return el;
+};
 
 // A scoring zone as groups of tricks plus the loose cards.
 function trickGroups(zid, { compact = false } = {}) {
@@ -469,7 +517,7 @@ function trickGroups(zid, { compact = false } = {}) {
   const card = (u) => {
     if (compact) return chipCard(u);
     const d = cardDef(game, st, u);
-    const el = isVisibleTo(game, st, u, HUMAN) && d ? cardFace(d) : cardBack(game);
+    const el = isVisibleTo(game, st, u, HUMAN) && d ? infoOnClick(cardFace(d), d) : cardBack(game);
     if (!st.cards[u].faceUp && own) el.classList.add('pv-facedown');
     return el;
   };
@@ -503,7 +551,7 @@ function stealButtons(p) {
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
-  }).sort((a, b) => b.gain - a.gain).slice(0, 4);
+  }).sort((a, b) => b.gain - a.gain || a.cards.length - b.cards.length).slice(0, 2);
   return h('div', { class: 'pv-steals' }, uniq.map((o) => h('button', {
     class: 'btn small pv-steal-btn', title: o.label, onclick: () => act(o.action),
   }, `🗡 Take their ${o.combo || 'set'} with `, h('span', { class: 'pv-steal-cards' }, o.cards.map(chipCard)), ` +${o.gain}${o.cards.length > 1 ? ` · ${o.cards.length} actions` : ''}`)));
@@ -550,7 +598,7 @@ function zoneView(zid) {
   const market = isSets(game) && zid === setsCfg(game).marketZone;
   const cardEl = (u) => {
     const d = cardDef(game, st, u);
-    return isVisibleTo(game, st, u, HUMAN) && d ? cardFace(d) : cardBack(game);
+    return isVisibleTo(game, st, u, HUMAN) && d ? infoOnClick(cardFace(d), d) : cardBack(game);
   };
   let body;
   if (trickZone) {
@@ -697,6 +745,7 @@ function myArea() {
       chips,
       others.map((z) => h('span', { class: 'pv-chip', title: st.zones[z].name }, `${zoneDef(game, st.zones[z].defId).name}: ${st.zones[z].cards.length} card${st.zones[z].cards.length === 1 ? '' : 's'}`))),
     sets ? mySets() : null,
+    sel && st.cards[sel] ? pickedInfo(cardDef(game, st, sel)) : null,
     tip ? h('p', { class: 'pv-tip' }, tip) : null,
     actions.length ? h('div', { class: 'pv-actions' }, actions) : null,
     h('div', { class: `pv-hand ${cards.length > 9 ? 'many' : ''}` }, cards.map((u) => {
@@ -706,11 +755,12 @@ function myArea() {
       el.classList.add('pv-card');
       if (sel === u) el.classList.add('picked');
       if (lm) {
-        if (lm.cards[u]) { el.classList.add('no'); el.title = lm.cards[u]; } else { el.classList.add('ok'); el.title = lm.discarding ? 'Tap to discard' : lm.options ? 'Tap to pick up' : 'Tap to play'; }
+        if (lm.cards[u]) { el.classList.add('no'); el.title = `${cardText(d)}\n${lm.cards[u]}`; } else { el.classList.add('ok'); el.title = `${cardText(d)}\n${lm.discarding ? 'Tap to discard' : lm.options ? 'Tap to pick up' : 'Tap to play'}`; }
       } else if (myTurn()) {
         el.classList.add('ok');
       }
       if (myTurn()) el.addEventListener('click', () => playCard(u));
+      else infoOnClick(el, d);
       return el;
     })));
 }
@@ -766,10 +816,7 @@ function cheatSheet() {
   const S = setsCfg(game);
   const C = compileSets(game, S);
   const byId = Object.fromEntries(game.cards.map((c) => [c.id, c]));
-  const chip = (id) => {
-    const d = byId[id];
-    return h('span', { class: 'pv-chipcard', style: { background: d?.color }, title: d?.name }, d?.icon || d?.name?.slice(0, 2));
-  };
+  const chip = (id) => defChip(byId[id]);
   const slotView = (s) => {
     const ids = s.ids ? [...s.ids] : null;
     if (!ids) return h('span', { class: 'pv-cs-slot' }, Array.from({ length: Math.min(s.count, 3) }, () => h('span', { class: 'pv-chipcard any' }, '?')), h('span', { class: 'pv-cs-x' }, s.distinct ? `${s.count} different` : s.count === 1 ? 'any card' : `any ${s.count}`));

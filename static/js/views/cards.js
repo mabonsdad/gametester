@@ -107,9 +107,9 @@ export async function renderCards(root, ctx) {
               c.image ? h('button', { class: 'btn small', onclick: () => { c.image = null; ctx.changed(); drawEditor(); redraw(); } }, 'Remove image') : null,
               imgInput),
             h('div', { class: 'radio-row' },
-              ['art', 'full'].map((m) => h('label', {},
+              ['art', 'full', 'card'].map((m) => h('label', {},
                 h('input', { type: 'radio', name: 'imgmode', checked: (c.imageMode || 'art') === m, onchange: () => { c.imageMode = m; redraw(); ctx.changed(); } }),
-                m === 'art' ? ' Picture in a frame, with title and text' : ' Image is the whole card face'))))),
+                { art: ' Picture in a frame, with title and text', full: ' Image fills the card, title on top', card: ' Image is the finished card (it already shows the name and text)' }[m]))))),
         preview));
     redraw();
   }
