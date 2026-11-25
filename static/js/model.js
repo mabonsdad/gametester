@@ -475,7 +475,7 @@ export function werewolfProject() {
   p.theme = 'werewolf';
   p.description = 'Collect village and werewolf cards and lay them as sets: face up by Day for double points (but others can finish and steal them), or face down by Night, safe and secret. Two actions a turn; most points when the Night pile runs out wins.';
   p.players = { min: 3, max: 4, default: 4 };
-  p.cardBack = { color: '#1f2540', image: null, label: 'NIGHT' };
+  p.cardBack = { color: '#1f2540', image: 'img/weirdwolves/back.webp', label: 'NIGHT' };
   p.zones = [
     { id: 'nightpile', name: 'Night pile', scope: 'shared', layout: 'stack', faceUp: false, visibility: 'public' },
     { id: 'dayrow', name: 'Day cards', scope: 'shared', layout: 'spread', faceUp: true, visibility: 'public' },
@@ -510,10 +510,10 @@ export function werewolfProject() {
         { id: 'mob', label: 'Mob', pattern: '5 villagers', points: '' },
         { id: 'vision', label: 'Vision', pattern: 'seer + 3 any distinct', points: '' },
         { id: 'hunt', label: 'Dinner', pattern: 'werewolf + villager', points: '' },
-        { id: 'potion', label: 'Potion', pattern: 'witch + villager + werewolf', points: '' },
+        { id: 'potion', label: 'Potions', pattern: 'witch + villager + werewolf', points: '' },
         { id: 'lovers', label: 'Lovers', pattern: 'cupid + 2 any', points: '' },
         { id: 'pack', label: 'Pack', pattern: 'alpha wolf + 2 werewolves', points: '' },
-        { id: 'guard', label: 'Guard', pattern: 'defender + villager/seer/witch/sister/hunter', points: '' },
+        { id: 'guard', label: 'Defend', pattern: 'defender + villager/seer/witch/sister/hunter', points: '' },
         { id: 'feast', label: 'Feast', pattern: 'vampire + 3 villagers', points: '' },
         { id: 'sisters', label: 'Sisters', pattern: '2 sisters', points: '' },
         { id: 'bullet', label: 'Hunt', pattern: 'hunter + werewolf', points: '' },
@@ -541,10 +541,10 @@ export function werewolfProject() {
       'Mob: 5 Villagers (5).\n' +
       'Vision: a Seer + 3 different cards (every role is different: Sisters and Hunters count too), e.g. Seer, Witch, Villager, Werewolf (9) or Seer, Seer, Werewolf, Cupid (7).\n' +
       'Dinner: a Werewolf + 1 Villager (4).\n' +
-      'Potion: a Witch + a Villager + a Werewolf (7).\n' +
+      'Potions: a Witch + a Villager + a Werewolf (7).\n' +
       'Lovers: Cupid + any 2 cards (the two cards\' values).\n' +
       'Pack: the Alpha Wolf + 2 Werewolves (10).\n' +
-      'Guard: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 6).\n' +
+      'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 6).\n' +
       'The Defender is wild: in any set it is worth as much as the most valuable other card it is with, so its worth depends on what it is grouped with.\n' +
       'Feast: a Vampire + 3 Villagers (8).\n' +
       'Sisters: a pair of Sisters (6).\n' +
@@ -558,10 +558,10 @@ export function werewolfProject() {
     card('villager', 'Villager', '🧑‍🌾', 1, 36, '#efe4c8', 'Value 1', 'Mob: 5 Villagers.'),
     card('seer', 'Seer', '🔮', 2, 5, '#c9b8ee', 'Value 2', 'Vision: a Seer + 3 different cards.'),
     card('werewolf', 'Werewolf', '🐺', 3, 16, '#b08a6e', 'Value 3', 'Dinner: a Werewolf + 1 lone Villager.'),
-    card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potion: Witch + Villager (saved) + Werewolf (killed).'),
+    card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potions: Witch + Villager (saved) + Werewolf (killed).'),
     card('cupid', 'Cupid', '💘', 0, 3, '#f6c2d6', 'Value 0', 'Lovers: Cupid + any 2 cards.'),
     card('alpha-wolf', 'Alpha Wolf', '🌕', 4, 1, '#8c7a9e', 'Value 4', 'Pack: Alpha Wolf + 2 Werewolves.'),
-    card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Wild: worth the best card it is with', 'Guard: a Defender + a Villager, Seer, Witch, Sister or Hunter.'),
+    card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Wild: worth the best card it is with', 'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter.'),
     card('vampire', 'Vampire', '🧛', 5, 4, '#d27a86', 'Value 5', 'Feast: a Vampire + 3 Villagers.'),
     card('sister', 'Sister', '👭', 3, 4, '#f1c9a5', 'Value 3', 'Sisters: a pair of Sisters.'),
     card('hunter', 'Hunter', '🏹', 2, 2, '#a9bf86', 'Value 2', 'Hunt: a Hunter + a Werewolf.'),
