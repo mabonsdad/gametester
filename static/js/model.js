@@ -481,17 +481,17 @@ export const WEREWOLF_SCORING = {
     label: 'Sets score (add up your sets)',
     cardsScore: false,
     dayMultiplier: 2,
-    value: { villager: 1, seer: 1, werewolf: 2, witch: 3, cupid: -1, 'alpha-wolf': 4, defender: 'same', vampire: 5, sister: 3, hunter: 2, cannibal: 6 },
+    value: { villager: 1, seer: 1, werewolf: 2, witch: 3, cupid: 0, 'alpha-wolf': 6, defender: 'same', vampire: 5, sister: 3, hunter: 2, cannibal: 8 },
     combos: {
       mob: ['5 villagers', ''], vision: ['seer + 3 tag:night distinct', ''], hunt: ['werewolf + villager', ''], potion: ['witch + villager + werewolf', ''],
       lovers: ['cupid + 2 any', ''], pack: ['alpha wolf + 3 werewolves', ''], guard: ['defender + villager/seer/witch/sister/hunter', ''],
-      feast: ['vampire + 3 villagers', ''], sisters: ['2 sisters', ''], bullet: ['hunter + werewolf', ''], banquet: ['cannibal + 5 tag:day', ''],
+      feast: ['vampire + 3 villagers', ''], sisters: ['2 sisters', ''], bullet: ['hunter + werewolf', ''], banquet: ['cannibal + 5 villagers', ''],
     },
     text: {
       villager: 'Mob: 5 Villagers.', seer: 'Vision: a Seer + 3 different Night characters (moon cards).', werewolf: 'Dinner: a Werewolf + a Villager.',
       witch: 'Potions: Witch + Villager (saved) + Werewolf (poisoned).', cupid: 'Lovers: Cupid + any 2 cards.', 'alpha-wolf': 'Pack: Alpha Wolf + 3 Werewolves.',
       defender: 'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter.', vampire: 'Feast: a Vampire + 3 Villagers.', sister: 'Sisters: a pair of Sisters.',
-      hunter: 'Hunt: a Hunter + a Werewolf.', cannibal: 'Banquet: a Cannibal + 5 Day characters (no moon).',
+      hunter: 'Hunt: a Hunter + a Werewolf.', cannibal: 'Banquet: a Cannibal + 5 Villagers.',
     },
     scoring:
       "Only cards in a set score. A set is worth the sum of its cards' values - doubled in your Day sets, single in your Night sets. Each card counts in one set only. Night sets are arranged for the most points; Day sets for the fewest lone cards.\n" +
@@ -500,13 +500,13 @@ export const WEREWOLF_SCORING = {
       'Vision: a Seer + 3 different Night characters, e.g. Seer, Witch, Werewolf, Vampire (11) or Seer, Seer, Werewolf, Witch (7).\n' +
       'Dinner: a Werewolf + a Villager (3).\n' +
       'Potions: a Witch + a Villager + a Werewolf (6).\n' +
-      "Lovers: Cupid + any 2 cards (the two cards' values, less 1 for Cupid).\n" +
-      'Pack: the Alpha Wolf + 3 Werewolves (10).\n' +
+      "Lovers: Cupid + any 2 cards (the two cards' values).\n" +
+      'Pack: the Alpha Wolf + 3 Werewolves (12).\n' +
       'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 6). The Defender is wild: it is worth as much as the card it is with.\n' +
       'Feast: a Vampire + 3 Villagers (8).\n' +
       'Sisters: a pair of Sisters (6).\n' +
       'Hunt: a Hunter + a Werewolf (4).\n' +
-      'Banquet: a Cannibal + 5 Day characters (Villager, Cupid, Defender, Sister, Hunter or Cannibal), e.g. with 5 Villagers (11).',
+      'Banquet: a Cannibal + 5 Villagers (13).',
   },
   every: {
     label: 'Every card scores (+ set bonuses)',
@@ -654,8 +654,9 @@ export function werewolfProject() {
     card('hunter', 'Hunter', '🏹', 2, '#a9bf86'),
     card('cannibal', 'Cannibal', '🍖', 2, '#c98a5a'),
   ];
-  // Finished card art (name, value and text are in the picture). The Cannibal has none yet.
-  for (const id of ['villager', 'seer', 'werewolf', 'witch', 'cupid', 'alpha-wolf', 'defender', 'vampire', 'sister', 'hunter']) {
+  // Finished card art (name, value and text are in the picture; the values
+  // are those of the standard "Sets score" scoring).
+  for (const id of ['villager', 'seer', 'werewolf', 'witch', 'cupid', 'alpha-wolf', 'defender', 'vampire', 'sister', 'hunter', 'cannibal']) {
     const c = p.cards.find((x) => x.id === id);
     c.image = `img/weirdwolves/${id}.webp`;
     c.imageMode = 'card';
