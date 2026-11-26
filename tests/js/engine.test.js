@@ -584,3 +584,54 @@ test('Weirdwolves: named sets, and "sets" (not "tricks") in what players read', 
   const lm = legalMoves(p, st, activePlayer(st).id);
   assert.doesNotMatch([lm.summary, ...lm.options.map((o) => o.label)].join(' '), /\btricks?\b/i);
 });
+
+test('set collection rule options: sets that lock, a per-turn zone limit, sets that move, the village vote', () => {
+  const p = normalizeProject(werewolfProject());
+  const S = p.automation.sets;
+  S.arrange = 'lock';
+  S.zoneLimits = { day: 1 };
+  S.combos.find((c) => c.id === 'lovers').moveTo = 'night';
+  S.vote = 'night';
+  const st = createGame(p, { players: players4.slice(0, 3), seed: 5 });
+  const put = (name, zone) => {
+    const u = Object.values(st.cards).find((c) => p.cards.find((d) => d.id === c.defId).name === name && c.zone === 'nightpile').uid;
+    const from = st.zones.nightpile.cards;
+    from.splice(from.indexOf(u), 1);
+    st.zones[zone].cards.push(u);
+    st.cards[u].zone = zone;
+    return u;
+  };
+  const turnOf = (pid) => { while (activePlayer(st).id !== pid) apply(p, st, { type: 'endTurn', actor: activePlayer(st).id }); };
+  turnOf('p1');
+  // One card a turn to the Day sets.
+  const w = put('Werewolf', 'p1.hand');
+  const v = put('Villager', 'p1.hand');
+  apply(p, st, { type: 'move', card: w, to: 'day', actor: 'p1' });
+  assert.ok(!legalMoves(p, st, 'p1').options.some((o) => o.kind === 'play' && o.to === 'p1.day'), 'no second Day play');
+  assert.match(checkAction(p, st, { type: 'move', card: v, to: 'day', actor: 'p1' }), /only 1 card a turn/);
+  apply(p, st, { type: 'move', card: v, to: 'night', actor: 'p1' });
+  // Next turn the Villager completes a Dinner, which locks.
+  turnOf('p1');
+  const v2 = put('Villager', 'p1.hand');
+  apply(p, st, { type: 'move', card: v2, to: 'day', actor: 'p1' });
+  assert.deepEqual(st.stacks['p1.day'].map((g) => g.length), [2]);
+  // A locked set is not regrouped: a Seer, Witch and Hunter added later cannot take the Werewolf into a Vision.
+  for (const n of ['Seer', 'Witch', 'Hunter']) put(n, 'p1.day');
+  const t = zoneTricks(p, st, 'p1.day');
+  assert.ok(t.tricks.some((x) => x.label === 'Dinner' && x.stacked));
+  assert.equal(t.lone.length, 3);
+  // Lovers "go to sleep": made in the Day, they move to the Night sets.
+  apply(p, st, { type: 'endTurn', actor: 'p1' });
+  const cupid = put('Cupid', 'p2.hand');
+  put('Sister', 'p2.day'); put('Hunter', 'p2.day');
+  apply(p, st, { type: 'move', card: cupid, to: 'day', actor: 'p2' });
+  assert.equal(st.cards[cupid].zone, 'p2.night');
+  assert.equal(st.zones['p2.day'].cards.length, 0);
+  assert.ok(st.log.some((e) => e.type === 'nightfall' && /Lovers/.test(e.text)));
+  // The village vote at the end of the round: p1 leads the Day, so their Dinner moves to their Night.
+  apply(p, st, { type: 'endTurn', actor: 'p2' });
+  apply(p, st, { type: 'endTurn', actor: 'p3' });
+  assert.equal(activePlayer(st).id, 'p1');
+  assert.equal(st.cards[w].zone, 'p1.night');
+  assert.ok(st.log.some((e) => e.type === 'nightfall' && e.data?.vote));
+});

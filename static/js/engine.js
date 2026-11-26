@@ -1123,8 +1123,20 @@ const SETS_DEFAULTS = {
   stackZones: null, // zone ids where tricks are protected; null = the give zone
   // In those zones: 'auto' = cards are grouped into tricks automatically, leaving
   // as few lone cards as possible (the least valuable ones if there is a choice),
-  // and every trick is safe; 'manual' = players stack tricks themselves.
+  // and every trick is safe; 'lock' = a trick is fixed (and safe) as soon as it
+  // forms, so its cards cannot be regrouped later; 'manual' = players stack
+  // tricks themselves.
   arrange: 'manual',
+  // Most cards a player may play to their own zone of each type per turn,
+  // e.g. { day: 1 } (steals and swaps do not count). {} = no limit.
+  zoneLimits: {},
+  // A combo may also say moveTo: '<zone id>': when it forms in a stacking zone
+  // its cards move to the owner's zone of that type (e.g. Night roles' sets
+  // "go to sleep": they move to the Night sets).
+  // The village vote at the end of each round: 'off', or 'night' = the player
+  // with the most points in the give zone (Day) moves their most valuable set
+  // there to their capture zone (Night), where it scores less and is out of play.
+  vote: 'off',
 };
 export const setsCfg = (project) => ({ ...SETS_DEFAULTS, ...(automation(project).sets || {}) });
 const setsC = (project) => compileSets(project, setsCfg(project));
@@ -1143,6 +1155,12 @@ const stackZones = (project) => {
 };
 export const canStack = (project, st, zid) => !!st.zones[zid]?.owner && stackZones(project).includes(st.zones[zid].defId);
 const autoArranged = (project, st, zid) => setsCfg(project).arrange === 'auto' && canStack(project, st, zid);
+const locking = (project, st, zid) => setsCfg(project).arrange === 'lock' && canStack(project, st, zid);
+const zoneLimit = (project, st, zid) => {
+  const n = Number(setsCfg(project).zoneLimits?.[st.zones[zid]?.defId]);
+  return n > 0 ? n : 0;
+};
+const zonePlays = (st, zid) => st.hand.zonePlays?.[zid] || 0;
 
 // The zone's stacks that are still valid (all cards there, still a trick).
 function zoneStacks(project, st, zid) {
@@ -1193,6 +1211,7 @@ function zonePointsIf(project, st, zid, add, stackAs) {
   const stacked = t.stacks.reduce((a, g) => a + g.points, 0);
   const lone = t.lone.map((u) => st.cards[u].defId);
   if (add) lone.push(add);
+  if (locking(project, st, zid)) return stacked + bestTricks(C, lone, 'cover').total;
   if (!stackAs) return stacked + bestTricks(C, lone).total;
   for (const d of stackAs.defIds) lone.splice(lone.indexOf(d), 1);
   return stacked + stackAs.points + bestTricks(C, lone).total;
@@ -1262,7 +1281,7 @@ function stackProblem(project, st, pid, cards) {
   if (cards.some((u) => st.cards[u].zone !== zid)) return 'The cards of a stack must all be in the same zone.';
   if (st.zones[zid].owner !== pid) return 'You can only stack cards in your own zones.';
   if (!canStack(project, st, zid)) return `Cards cannot be stacked in the ${zoneDef(project, st.zones[zid].defId)?.name || zid}.`;
-  if (autoArranged(project, st, zid)) return 'Sets there are grouped automatically - no need to stack them.';
+  if (autoArranged(project, st, zid) || locking(project, st, zid)) return 'Sets there are grouped automatically - no need to stack them.';
   const lone = zoneTricks(project, st, zid).lone;
   if (cards.some((u) => !lone.includes(u))) return 'Some of those cards are already in a stack.';
   if (!matchGroup(setsC(project), cards.map((u) => st.cards[u].defId))) return `${cards.map((u) => cardName(project, st, u)).join(', ')} is not a set.`;
@@ -1274,7 +1293,10 @@ export function setsBreakdown(project, st, pid) {
   const zones = scoreZones(project).map((s) => {
     const zid = `${pid}.${s.zone}`;
     const r = zoneTricks(project, st, zid);
-    return { zid, defId: s.zone, name: zoneDef(project, s.zone).name, multiplier: mult(s), secret: !!s.secret, raw: r.total, points: r.total * mult(s), tricks: r.tricks, loose: r.loose };
+    // A zone may also score cards in no set: s.lone x their value (not multiplied).
+    const C = setsC(project);
+    const loneValue = Number(s.lone) > 0 ? r.loose.reduce((a, u) => a + (C.wild.has(st.cards[u].defId) ? 0 : C.values[st.cards[u].defId] || 0), 0) * Number(s.lone) : 0;
+    return { zid, defId: s.zone, name: zoneDef(project, s.zone).name, multiplier: mult(s), secret: !!s.secret, raw: r.total, loneValue, points: r.total * mult(s) + loneValue, tricks: r.tricks, loose: r.loose };
   });
   const pub = zones.filter((z) => !z.secret).reduce((a, z) => a + z.points, 0);
   const hidden = zones.filter((z) => z.secret).reduce((a, z) => a + z.points, 0);
@@ -1284,11 +1306,44 @@ export function setsBreakdown(project, st, pid) {
 function setsRescore(project, st) {
   const S = setsCfg(project);
   for (const zid of Object.keys(st.stacks || {})) st.stacks[zid] = zoneStacks(project, st, zid).map((g) => g.cards);
+  setsSettle(project, st);
   if (!automation(project).autoScore) return;
   for (const p of st.players) {
     if (!(S.counter in p.counters)) continue;
     const b = setsBreakdown(project, st, p.id);
     p.counters[S.counter] = st.revealed ? b.total : b.public;
+  }
+}
+
+// 'lock' zones: group the lone cards into sets, which are then fixed. Then
+// move every set whose combo has moveTo (e.g. to the Night sets).
+function setsSettle(project, st) {
+  const S = setsCfg(project);
+  const C = setsC(project);
+  const moving = new Map((S.combos || []).filter((c) => c.moveTo).map((c, i) => [c.id || `combo${i + 1}`, c.moveTo]));
+  for (let round = 0; round < 20; round++) {
+    let changed = false;
+    for (const zid of Object.keys(st.zones)) {
+      if (!canStack(project, st, zid)) continue;
+      if (locking(project, st, zid)) {
+        const lone = zoneTricks(project, st, zid).lone;
+        const defOf = (u) => st.cards[u].defId;
+        for (const t of assignCards(bestTricks(C, lone.map(defOf), 'cover'), lone, defOf).tricks) addStack(st, zid, t.cards);
+      }
+      if (!moving.size) continue;
+      const owner = st.zones[zid].owner;
+      for (const t of zoneTricks(project, st, zid).tricks) {
+        const dest = moving.get(t.id) && `${owner}.${moving.get(t.id)}`;
+        if (!dest || !st.zones[dest] || dest === zid) continue;
+        for (const u of t.cards) placeCard(project, st, u, dest);
+        if (st.stacks?.[zid]) st.stacks[zid] = st.stacks[zid].filter((g) => !g.some((u) => t.cards.includes(u)));
+        log(st, 'system', 'nightfall', `${player(st, owner).name}'s ${t.label} (${t.cards.map((u) => cardName(project, st, u)).join(', ')}) goes to sleep: it moves to their ${zoneDef(project, st.zones[dest].defId)?.name || dest}.`,
+          { data: { owner, combo: t.label, cards: t.cards.slice(), from: zid, to: dest } });
+        changed = true;
+        break; // the zone has changed: look again
+      }
+    }
+    if (!changed) return;
   }
 }
 
@@ -1309,6 +1364,7 @@ function swapCards(project, st, a, b) {
 function startSets(project, st) {
   const H = st.hand;
   H.actionsUsed = 0;
+  H.zonePlays = {};
   H.discarding = false;
   H.lastSeat = null;
   st.turn.active = nextSeat(project, st, st.dealer);
@@ -1415,6 +1471,10 @@ function setsApply(project, st, a, actor) {
   }
   const sz = scoreZoneOf(project, st, to);
   if (zone.owner === actor && sz) {
+    const cap = zoneLimit(project, st, to);
+    if (cap && zonePlays(st, to) >= cap) throw new Error(`You can play only ${cap} card${cap === 1 ? '' : 's'} a turn to your ${zname}.`);
+    H.zonePlays ||= {};
+    H.zonePlays[to] = zonePlays(st, to) + 1;
     const before = zoneTricks(project, st, to);
     // "stack": true also stacks the trick this card completes.
     const stackAs = a.stack && canStack(project, st, to) && !autoArranged(project, st, to) ? bestTrickWith(setsC(project), before.lone.map((u) => st.cards[u].defId), c.defId) : null;
@@ -1514,10 +1574,31 @@ function setsAdvance(project, st) {
     if (hit) { setsFinish(project, st, r.label || r.expr); return; }
   }
   H.actionsUsed = 0;
+  H.zonePlays = {};
   H.discarding = false;
   st.turn.active = nextSeat(project, st, st.turn.active);
+  if (st.turn.active === H.firstSeat) villageVote(project, st);
   st.turn.number++;
   log(st, 'system', 'turn', `Turn ${st.turn.number}: ${activePlayer(st).name}.`);
+}
+
+// The end of a round: the Day leader's best Day set is moved to their Night.
+function villageVote(project, st) {
+  const S = setsCfg(project);
+  if (S.vote !== 'night' || !S.giveZone || !S.captureZone) return;
+  const day = st.players.map((p) => ({ p, zid: `${p.id}.${S.giveZone}` })).filter((x) => st.zones[x.zid]).map((x) => ({ ...x, t: zoneTricks(project, st, x.zid) }));
+  const top = Math.max(0, ...day.map((x) => x.t.total));
+  const leaders = day.filter((x) => x.t.total === top);
+  if (!top || leaders.length !== 1) return; // a tie: the village cannot agree
+  const { p, zid, t } = leaders[0];
+  const set = t.tricks.slice().sort((a, b) => b.points - a.points)[0];
+  const dest = `${p.id}.${S.captureZone}`;
+  if (!set || !st.zones[dest]) return;
+  for (const u of set.cards) placeCard(project, st, u, dest);
+  if (st.stacks?.[zid]) st.stacks[zid] = st.stacks[zid].filter((g) => !g.some((u) => set.cards.includes(u)));
+  log(st, 'system', 'nightfall', `The village vote: ${p.name} leads the Day, so their ${set.label} (${set.cards.map((u) => cardName(project, st, u)).join(', ')}) is driven into the ${zoneDef(project, st.zones[dest].defId)?.name || 'night'}.`,
+    { data: { owner: p.id, combo: set.label, cards: set.cards.slice(), from: zid, to: dest, vote: true } });
+  setsRescore(project, st);
 }
 
 function setsFinish(project, st, reason) {
@@ -1608,9 +1689,11 @@ function setsLegal(project, st, pid, out) {
     const d = st.cards[u].defId;
     own.forEach((x, i) => {
       const zname = zoneDef(project, x.s.zone).name;
+      const cap = zoneLimit(project, st, x.zid);
+      if (cap && zonePlays(st, x.zid) >= cap) return; // already played the most allowed there this turn
       const up = isPublicZone(project, st, x.zid);
       const gain = (zonePointsIf(project, st, x.zid, d) - ownBase[i]) * mult(x.s);
-      const stackAs = canStack(project, st, x.zid) ? bestTrickWith(C, ownLone[i], d) : null;
+      const stackAs = canStack(project, st, x.zid) && !locking(project, st, x.zid) ? bestTrickWith(C, ownLone[i], d) : null;
       if (stackAs) {
         const g = (zonePointsIf(project, st, x.zid, d, stackAs) - ownBase[i]) * mult(x.s);
         out.options.push({ kind: 'play', card: u, to: x.zid, gain: g, stack: true, label: `Play to your ${zname} and stack the ${stackAs.label} (safe)${g > 0 ? `: +${g}` : ''}`, action: { type: 'move', card: u, to: x.zid, stack: true } });
@@ -1668,6 +1751,8 @@ function checkSets(project, st, action, actor) {
       const z = to && st.zones[to];
       if (z?.owner && z.owner !== actor && z.defId === S.giveZone) return `${cardName(project, st, action.card)} does not complete a set with the unstacked cards in ${player(st, z.owner).name}'s ${zoneDef(project, z.defId).name} (stacked sets are safe).`;
       if (to === resolveZone(st, S.discardZone, actor)) return `You only discard when you have more than ${lm.handLimit} cards at the end of your turn.`;
+      const cap = z?.owner === actor ? zoneLimit(project, st, to) : 0;
+      if (cap && zonePlays(st, to) >= cap) return `You can play only ${cap} card${cap === 1 ? '' : 's'} a turn to your ${zoneDef(project, z.defId)?.name || 'zone'}.`;
       return `Play it to your own ${scoreZones(project).map((x) => zoneDef(project, x.zone).name).join(' or ')}, swap it, or use it to complete a set in another player's ${zoneDef(project, S.giveZone)?.name || 'zone'}.`;
     }
     case 'endTurn': return null;
