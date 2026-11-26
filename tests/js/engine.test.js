@@ -667,3 +667,51 @@ test('set collection: a set limit moves a set of the player\'s choice to the Nig
   assert.equal(zoneTricks(p, st, 'p1.night').tricks.find((t) => t.label === 'Sisters').points, 6);
   assert.equal(activePlayer(st).id, 'p2');
 });
+
+test('set collection: cards that always score, and Day cards swapped into the Day or taken into the Night', () => {
+  const p = normalizeProject(werewolfProject());
+  const S = p.automation.sets;
+  S.cardsScore = true;
+  S.swapTo = ['day'];
+  S.takeTo = ['night'];
+  for (const c of S.combos) c.points = { hunt: '1', guard: '2' }[c.id] || '3';
+  const st = createGame(p, { players: players4.slice(0, 3), seed: 4 });
+  const put = (name, zone) => {
+    const u = Object.values(st.cards).find((c) => p.cards.find((d) => d.id === c.defId).name === name && c.zone === 'nightpile').uid;
+    const from = st.zones.nightpile.cards;
+    from.splice(from.indexOf(u), 1);
+    st.zones[zone].cards.push(u);
+    st.cards[u].zone = zone;
+    return u;
+  };
+  // A lone Werewolf scores its 3; with a Villager it is a Dinner: 3 + 1 + bonus 1.
+  put('Werewolf', 'p2.day');
+  assert.equal(zoneTricks(p, st, 'p2.day').total, 3);
+  put('Villager', 'p2.day');
+  assert.equal(zoneTricks(p, st, 'p2.day').total, 5);
+  // A Defender is worth the best card in its set, and nothing alone.
+  put('Defender', 'p3.night');
+  assert.equal(zoneTricks(p, st, 'p3.night').total, 0);
+  put('Witch', 'p3.night');
+  assert.equal(zoneTricks(p, st, 'p3.night').total, 3 + 3 + 2);
+  while (activePlayer(st).id !== 'p1') apply(p, st, { type: 'endTurn', actor: activePlayer(st).id });
+  const market = st.zones.dayrow.cards.slice();
+  const mine = put('Seer', 'p1.hand');
+  // Swap straight into the Day: one action, the hand card takes its place in the Day cards.
+  const lm = legalMoves(p, st, 'p1');
+  assert.ok(lm.options.some((o) => o.kind === 'swap' && o.to === 'p1.day'));
+  assert.ok(lm.options.some((o) => o.kind === 'take' && o.to === 'p1.night'));
+  assert.ok(!lm.options.some((o) => o.kind === 'take' && o.to === 'p1.day'), 'no take into the Day');
+  apply(p, st, { type: 'swap', card: mine, with: market[0], to: 'day', actor: 'p1' });
+  assert.equal(st.cards[market[0]].zone, 'p1.day');
+  assert.equal(st.cards[mine].zone, 'dayrow');
+  assert.equal(st.hand.actionsUsed, 1);
+  // Take into the Night: no swap, refilled from the Night pile.
+  const pile = st.zones.nightpile.cards.length;
+  apply(p, st, { type: 'take', with: market[1], to: 'night', actor: 'p1' });
+  assert.equal(st.cards[market[1]].zone, 'p1.night');
+  assert.equal(st.zones.dayrow.cards.length, 4);
+  assert.equal(st.zones.nightpile.cards.length, pile - 1);
+  assert.equal(activePlayer(st).id, 'p2', 'two actions used');
+  assert.match(checkAction(p, st, { type: 'take', with: st.zones.dayrow.cards[0], to: 'day', actor: 'p2' }), /only into your Night sets/);
+});

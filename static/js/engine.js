@@ -297,7 +297,7 @@ export function apply(project, st, action) {
   const a = action || {};
   const actor = a.actor || activePlayer(st).id;
   const who = player(st, actor)?.name || actor;
-  if (isSets(project) && st.hand && st.status === 'playing' && player(st, actor) && ['move', 'draw', 'swap', 'endTurn', 'stack', 'steal', 'retire'].includes(a.type)) {
+  if (isSets(project) && st.hand && st.status === 'playing' && player(st, actor) && ['move', 'draw', 'swap', 'take', 'endTurn', 'stack', 'steal', 'retire'].includes(a.type)) {
     setsApply(project, st, a, actor);
     return st;
   }
@@ -1141,6 +1141,14 @@ const SETS_DEFAULTS = {
   // { day: 3 }: with more, they move whole sets of their choice to their
   // capture zone (Night) until they are within the limit.
   setLimits: {},
+  // true: every card scores its value wherever it lies in a scoring zone (in a
+  // set or not); a set then scores its combo's points as a bonus on top.
+  cardsScore: false,
+  // Zone types a face-up (market) card may go straight into: swapTo = in
+  // exchange for a card from your hand (one action), takeTo = without a swap,
+  // the gap refilled from the draw pile (one action).
+  swapTo: [],
+  takeTo: [],
 };
 export const setsCfg = (project) => ({ ...SETS_DEFAULTS, ...(automation(project).sets || {}) });
 const setsC = (project) => compileSets(project, setsCfg(project));
@@ -1165,6 +1173,19 @@ const zoneLimit = (project, st, zid) => {
   return n > 0 ? n : 0;
 };
 const zonePlays = (st, zid) => st.hand.zonePlays?.[zid] || 0;
+// cardsScore: what the cards themselves are worth - wild cards are worth the
+// best other card in their set, and nothing on their own.
+function cardsBase(project, st, uids, tricks) {
+  if (!setsCfg(project).cardsScore) return 0;
+  const C = setsC(project);
+  const inSet = new Map();
+  for (const t of tricks) {
+    const top = Math.max(0, ...t.cards.filter((u) => !C.wild.has(st.cards[u].defId)).map((u) => C.values[st.cards[u].defId] || 0));
+    for (const u of t.cards) inSet.set(u, top);
+  }
+  return uids.reduce((a, u) => a + (C.wild.has(st.cards[u].defId) ? inSet.get(u) || 0 : C.values[st.cards[u].defId] || 0), 0);
+}
+
 // The first of pid's zones that holds more sets than its limit, or null.
 function overSetLimit(project, st, pid) {
   const S = setsCfg(project);
@@ -1200,15 +1221,16 @@ export function zoneTricks(project, st, zid) {
     // Every trick is protected; only the cards left alone can be used by others.
     const r = assignCards(bestTricks(setsC(project), uids.map(defOf), 'cover'), uids, defOf);
     const tricks = r.tricks.map((t) => ({ ...t, stacked: true }));
-    return { total: r.total, tricks, loose: r.loose, lone: r.loose, stacks: tricks };
+    return { total: r.total + cardsBase(project, st, uids, tricks), tricks, loose: r.loose, lone: r.loose, stacks: tricks };
   }
   const stacks = zoneStacks(project, st, zid);
   const inStack = new Set(stacks.flatMap((g) => g.cards));
   const lone = uids.filter((u) => !inStack.has(u));
   const r = assignCards(bestTricks(setsC(project), lone.map(defOf)), lone, defOf);
+  const tricks = [...stacks, ...r.tricks.map((t) => ({ ...t, stacked: false }))];
   return {
-    total: stacks.reduce((a, g) => a + g.points, 0) + r.total,
-    tricks: [...stacks, ...r.tricks.map((t) => ({ ...t, stacked: false }))],
+    total: stacks.reduce((a, g) => a + g.points, 0) + r.total + cardsBase(project, st, uids, tricks),
+    tricks,
     loose: r.loose,
     lone,
     stacks,
@@ -1218,6 +1240,13 @@ export function zoneTricks(project, st, zid) {
 // Raw points of a zone if card type `add` were played there, optionally
 // stacked as the trick `stackAs` ({ defIds, points }).
 function zonePointsIf(project, st, zid, add, stackAs) {
+  const C = setsC(project);
+  // cardsScore: the cards' own values (wild cards counted as nothing here).
+  const base = setsCfg(project).cardsScore ? [...(st.zones[zid]?.cards || []).map((u) => st.cards[u].defId), ...(add ? [add] : [])].reduce((a, d) => a + (C.wild.has(d) ? 0 : C.values[d] || 0), 0) : 0;
+  return base + zonePointsIfSets(project, st, zid, add, stackAs);
+}
+
+function zonePointsIfSets(project, st, zid, add, stackAs) {
   const C = setsC(project);
   if (autoArranged(project, st, zid)) return bestTricks(C, [...(st.zones[zid]?.cards || []).map((u) => st.cards[u].defId), ...(add ? [add] : [])], 'cover').total;
   const t = zoneTricks(project, st, zid);
@@ -1457,8 +1486,30 @@ function setsApply(project, st, a, actor) {
     if (!mine || mine.zone !== handZ) throw new Error('Swap a card from your own hand.');
     if (!theirs || theirs.zone !== S.marketZone) throw new Error(`Swap it for one of the face-up cards in the ${market?.name || 'market'}.`);
     const mineName = cardName(project, st, a.card);
+    const dest = a.to ? resolveZone(st, a.to, actor) : null;
+    if (dest && !(st.zones[dest]?.owner === actor && (S.swapTo || []).includes(st.zones[dest].defId))) throw new Error(`A swapped card goes to your hand${(S.swapTo || []).length ? ` or your ${S.swapTo.map((z) => zoneDef(project, z)?.name).join(' or ')}` : ''}.`);
     swapCards(project, st, a.card, a.with);
-    log(st, actor, 'swap', `${who} swapped ${mineName} from their hand for ${cardName(project, st, a.with)} from the ${market.name}.`, { data: { card: a.card, with: a.with } });
+    if (dest) placeCard(project, st, a.with, dest);
+    const where = dest ? `straight into their ${zoneDef(project, st.zones[dest].defId)?.name}` : 'from the ' + market.name;
+    log(st, actor, 'swap', `${who} swapped ${mineName} from their hand for ${cardName(project, st, a.with)} ${dest ? `from the ${market.name}, ${where}` : where}.`, { data: { card: a.card, with: a.with, to: dest } });
+    setsUsed(project, st, actor);
+    return;
+  }
+  if (a.type === 'take') {
+    // A face-up card straight into one of your zones, no swap; the gap is refilled from the draw pile.
+    const theirs = st.cards[a.with];
+    const market = st.zones[S.marketZone];
+    const dest = resolveZone(st, a.to, actor);
+    if (!theirs || theirs.zone !== S.marketZone) throw new Error(`Take one of the face-up cards in the ${market?.name || 'market'}.`);
+    if (!dest || st.zones[dest]?.owner !== actor || !(S.takeTo || []).includes(st.zones[dest].defId)) throw new Error(`A card taken without a swap goes to your ${(S.takeTo || []).map((z) => zoneDef(project, z)?.name).join(' or ') || '(not allowed)'}.`);
+    const name = cardName(project, st, a.with);
+    placeCard(project, st, a.with, dest);
+    const deck = st.zones[S.drawZone];
+    const top = deck?.cards[deck.cards.length - 1];
+    if (top) placeCard(project, st, top, S.marketZone, { faceUp: true });
+    const zname = zoneDef(project, st.zones[dest].defId)?.name;
+    const faceUp = isPublicZone(project, st, dest);
+    log(st, actor, 'take', `${who} took ${name} from the ${market.name} straight into their ${zname}${faceUp ? '' : ' (face down)'}${top ? `; ${cardName(project, st, top)} replaces it` : ''}.`, { data: { with: a.with, to: dest, refill: top || null } });
     setsUsed(project, st, actor);
     return;
   }
@@ -1775,6 +1826,16 @@ function setsLegal(project, st, pid, out) {
       });
     });
     for (const m of market) out.options.push({ kind: 'swap', card: u, with: m, gain: 0, label: `Swap for ${nm(m)} (${marketName})`, action: { type: 'swap', card: u, with: m } });
+    for (const z of S.swapTo || []) {
+      const zid = `${pid}.${z}`;
+      if (!st.zones[zid]) continue;
+      for (const m of market) out.options.push({ kind: 'swap', card: u, with: m, to: zid, gain: 0, label: `Swap for ${nm(m)} (${marketName}) and put it straight into your ${zoneDef(project, z)?.name}`, action: { type: 'swap', card: u, with: m, to: zid } });
+    }
+  }
+  for (const z of S.takeTo || []) {
+    const zid = `${pid}.${z}`;
+    if (!st.zones[zid]) continue;
+    for (const m of market) out.options.push({ kind: 'take', with: m, to: zid, gain: 0, label: `Take ${nm(m)} from the ${marketName} straight into your ${zoneDef(project, z)?.name}`, action: { type: 'take', with: m, to: zid } });
   }
   // Steals that need more than one card (one action per card). Single-card
   // steals are the 'give' options above.
@@ -1796,7 +1857,7 @@ function setsLegal(project, st, pid, out) {
 function checkSets(project, st, action, actor) {
   const S = setsCfg(project);
   const active = activePlayer(st);
-  if (['move', 'draw', 'swap', 'endTurn', 'stack', 'steal', 'retire'].includes(action.type) && actor !== active.id) return `It is ${active.name}'s turn, not ${player(st, actor).name}'s.`;
+  if (['move', 'draw', 'swap', 'take', 'endTurn', 'stack', 'steal', 'retire'].includes(action.type) && actor !== active.id) return `It is ${active.name}'s turn, not ${player(st, actor).name}'s.`;
   if (action.type === 'stack') return stackProblem(project, st, actor, action.cards);
   if (action.type === 'steal') return stealPlan(project, st, actor, action.cards, resolveZone(st, action.to, actor)).error || null;
   if (action.type === 'retire') return retireProblem(project, st, actor, action.cards);
@@ -1808,7 +1869,8 @@ function checkSets(project, st, action, actor) {
     case 'swap':
     case 'move': {
       const to = action.type === 'move' ? resolveZone(st, action.to, actor) : null;
-      const ok = lm.options.some((o) => o.action.type === action.type && o.action.card === action.card && (action.type === 'swap' ? o.action.with === action.with : o.action.to === to));
+      const swapTo = action.type === 'swap' && action.to ? resolveZone(st, action.to, actor) : undefined;
+      const ok = lm.options.some((o) => o.action.type === action.type && o.action.card === action.card && (action.type === 'swap' ? o.action.with === action.with && o.action.to === swapTo : o.action.to === to));
       if (ok) return null;
       if (lm.discarding) return `Discard down to ${lm.handLimit} cards first: move a card from your hand to the ${st.zones[S.discardZone]?.name || 'discard pile'}.`;
       if (!lm.actionsLeft) return 'You have no actions left - end your turn.';
@@ -1821,6 +1883,11 @@ function checkSets(project, st, action, actor) {
       const cap = z?.owner === actor ? zoneLimit(project, st, to) : 0;
       if (cap && zonePlays(st, to) >= cap) return `You can play only ${cap} card${cap === 1 ? '' : 's'} a turn to your ${zoneDef(project, z.defId)?.name || 'zone'}.`;
       return `Play it to your own ${scoreZones(project).map((x) => zoneDef(project, x.zone).name).join(' or ')}, swap it, or use it to complete a set in another player's ${zoneDef(project, S.giveZone)?.name || 'zone'}.`;
+    }
+    case 'take': {
+      const to = resolveZone(st, action.to, actor);
+      if (lm.options.some((o) => o.kind === 'take' && o.action.with === action.with && o.action.to === to)) return null;
+      return lm.discarding ? 'Discard first.' : !lm.actionsLeft ? 'You have no actions left - end your turn.' : `You can take a face-up card without a swap only into your ${(S.takeTo || []).map((z) => zoneDef(project, z)?.name).join(' or ') || '(not allowed in this game)'}.`;
     }
     case 'endTurn': return null;
     case 'flip': case 'shuffle': case 'phase': return `"${action.type}" is not part of this game.`;
