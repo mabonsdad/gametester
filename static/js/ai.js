@@ -64,8 +64,10 @@ export function buildSystemPrompt(project) {
 {
   "reasoning": "1-3 sentences: your plan for this turn",
   "actions": [ up to ${S.actions} of these, in order:
-     {"type":"draw"}                                          draw from the ${S.drawZone}
-     {"type":"swap","card":"<your hand card id>","with":"<face-up card id in ${S.marketZone}>"}
+${S.draw !== false ? `     {"type":"draw"}                                          draw from the ${S.drawZone}
+` : ''}${S.swap !== false ? `     {"type":"swap","card":"<your hand card id>","with":"<face-up card id in ${S.marketZone}>"}
+` : ''}${(S.takeTo || []).map((z) => `     {"type":"take","with":"<face-up card id in ${S.marketZone}>","to":"${z}"}   ${z === 'hand' ? 'take a face-up card into your hand' : `take a face-up card straight into your ${z} (one action)`}
+`).join('')}     {"type":"retire","cards":["<id>","<id>"]}                 only when told you have too many sets: move that whole set
      {"type":"move","card":"<your hand card id>","to":"<one of your scoring zones, e.g. ${(S.zones || []).map((z) => z.zone).join(' or ')}>"}
      {"type":"move","card":"<id>","to":"<zone>","stack":true}  also stack the set this card completes (protects it)
      {"type":"move","card":"<your hand card id>","to":"<another player's zone, e.g. p2.${S.giveZone}>"}   only when it completes a set there (listed in the state)
@@ -78,7 +80,7 @@ ${S.arrange === 'auto' ? '' : `     {"type":"stack","cards":["<id>","<id>"]}    
   "experience": "one sentence on how this turn felt from your seat (interesting choice? stuck? clever steal?)",
   "designerNotes": "rule ambiguities or design problems you noticed, or empty string"
 }
-${S.arrange === 'auto' ? 'Face-up cards are grouped into sets automatically (fewest lone cards); grouped sets are safe, lone cards can be used by other players to complete a set and take it.' : 'Stacked sets are safe; unstacked cards in a face-up zone can be used by other players to complete a set and take it, so stack a set as you finish it ("stack": true on the move).'} The turn passes automatically after your last action. If you draw a card you will be asked again for the rest of your turn (you will then see the card), so put a draw last in your list.`
+${S.arrange === 'auto' ? 'Face-up cards are grouped into sets automatically (fewest lone cards); grouped sets are safe, lone cards can be used by other players to complete a set and take it.' : 'Stacked sets are safe; unstacked cards in a face-up zone can be used by other players to complete a set and take it, so stack a set as you finish it ("stack": true on the move).'} The turn passes automatically after your last action.${S.draw !== false ? ' If you draw a card you will be asked again for the rest of your turn (you will then see the card), so put a draw last in your list.' : ` There is no drawing blind${S.swap === false ? ' and no swapping' : ''}: take cards from the face-up ${S.marketZone} (it is refilled from the ${S.drawZone}).`}${S.cardsScore ? ' Every card in your scoring zones scores its value, in a set or not; a set adds its bonus.' : ''}`
     : shedding
     ? `Reply with ONE JSON object and nothing else:
 {
@@ -206,7 +208,8 @@ ${wilds.length ? `For a wild card, add "choose" with one of: ${lm.colours.join('
 Actions left this turn: ${lm.actionsLeft ?? 0} of ${S.actions}. ${deck?.name || 'Draw pile'}: ${deck?.cards.length ?? 0} card(s) left.${st.hand.lastSeat != null ? ` The draw pile is empty: the game ends after ${st.players[st.hand.lastSeat].name}'s turn.` : ''}
 ${lm.summary}
 Your hand (${(st.zones[`${pid}.hand`]?.cards || []).length}, limit ${S.handLimit || 'none'}): ${nmList(st.zones[`${pid}.hand`]?.cards || [])}
-Face-up cards you can swap with (${st.zones[S.marketZone]?.name || S.marketZone}): ${nmList(st.zones[S.marketZone]?.cards || [])}
+Face-up cards you can ${(S.takeTo || []).length ? 'take' : 'swap with'} (${st.zones[S.marketZone]?.name || S.marketZone}): ${nmList(st.zones[S.marketZone]?.cards || [])}
+${lm.retiring ? `You have too many sets: move one of these (it does not use an action):\n${lm.options.filter((o) => o.kind === 'retire').map((o) => `- ${JSON.stringify(o.action)}: ${o.label}`).join('\n')}\n` : ''}
 Your sets (the best arrangement, worked out by the harness):
 ${mine.zones.map((z) => '- ' + zoneText(pid, z, true)).join('\n')}
 Your points: ${mine.public} showing${mine.hidden ? ` + ${mine.hidden} hidden in face-down zones` : ''} = ${mine.total}.

@@ -467,13 +467,126 @@ export function switchbackProject() {
 
 
 // ------------------------------------------------------------------ Weirdwolves
-// Set collection with a werewolf theme: lay tricks face up (Day, double
-// points, but others can finish them and take them) or face down (Night,
-// safe and secret).
+// Set collection with a werewolf theme: lay sets face up (Day, more points,
+// but others can finish lone cards and take them) or face down (Night, safe
+// and secret). Two scoring systems, chosen before a game (WEREWOLF_SCORING).
+
+// Night characters (a moon on the card); every other role is a Day character.
+const NIGHT_ROLES = ['seer', 'witch', 'werewolf', 'vampire', 'alpha-wolf'];
+
+// The two ways to score Weirdwolves. value: card values; combos: [pattern,
+// points] by set id; text: each card's rule line.
+export const WEREWOLF_SCORING = {
+  sets: {
+    label: 'Sets score (add up your sets)',
+    cardsScore: false,
+    dayMultiplier: 2,
+    value: { villager: 1, seer: 1, werewolf: 2, witch: 3, cupid: -1, 'alpha-wolf': 4, defender: 'same', vampire: 5, sister: 3, hunter: 2, cannibal: 6 },
+    combos: {
+      mob: ['5 villagers', ''], vision: ['seer + 3 tag:night distinct', ''], hunt: ['werewolf + villager', ''], potion: ['witch + villager + werewolf', ''],
+      lovers: ['cupid + 2 any', ''], pack: ['alpha wolf + 3 werewolves', ''], guard: ['defender + villager/seer/witch/sister/hunter', ''],
+      feast: ['vampire + 3 villagers', ''], sisters: ['2 sisters', ''], bullet: ['hunter + werewolf', ''], banquet: ['cannibal + 5 tag:day', ''],
+    },
+    text: {
+      villager: 'Mob: 5 Villagers.', seer: 'Vision: a Seer + 3 different Night characters (moon cards).', werewolf: 'Dinner: a Werewolf + a Villager.',
+      witch: 'Potions: Witch + Villager (saved) + Werewolf (poisoned).', cupid: 'Lovers: Cupid + any 2 cards.', 'alpha-wolf': 'Pack: Alpha Wolf + 3 Werewolves.',
+      defender: 'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter.', vampire: 'Feast: a Vampire + 3 Villagers.', sister: 'Sisters: a pair of Sisters.',
+      hunter: 'Hunt: a Hunter + a Werewolf.', cannibal: 'Banquet: a Cannibal + 5 Day characters (no moon).',
+    },
+    scoring:
+      "Only cards in a set score. A set is worth the sum of its cards' values - doubled in your Day sets, single in your Night sets. Each card counts in one set only. Night sets are arranged for the most points; Day sets for the fewest lone cards.\n" +
+      'Night characters have a moon on the card: Seer, Witch, Werewolf, Vampire and Alpha Wolf. All the others are Day characters.\n' +
+      'Mob: 5 Villagers (5).\n' +
+      'Vision: a Seer + 3 different Night characters, e.g. Seer, Witch, Werewolf, Vampire (11) or Seer, Seer, Werewolf, Witch (7).\n' +
+      'Dinner: a Werewolf + a Villager (3).\n' +
+      'Potions: a Witch + a Villager + a Werewolf (6).\n' +
+      "Lovers: Cupid + any 2 cards (the two cards' values, less 1 for Cupid).\n" +
+      'Pack: the Alpha Wolf + 3 Werewolves (10).\n' +
+      'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 6). The Defender is wild: it is worth as much as the card it is with.\n' +
+      'Feast: a Vampire + 3 Villagers (8).\n' +
+      'Sisters: a pair of Sisters (6).\n' +
+      'Hunt: a Hunter + a Werewolf (4).\n' +
+      'Banquet: a Cannibal + 5 Day characters (Villager, Cupid, Defender, Sister, Hunter or Cannibal), e.g. with 5 Villagers (11).',
+  },
+  every: {
+    label: 'Every card scores (+ set bonuses)',
+    cardsScore: true,
+    dayMultiplier: 3,
+    value: { villager: 0, seer: 1, werewolf: 2, witch: 2, cupid: 0, 'alpha-wolf': 3, defender: 'same', vampire: 4, sister: 1, hunter: 2, cannibal: 4 },
+    combos: {
+      mob: ['5 villagers', '8'], vision: ['seer + 3 tag:night distinct', '3'], hunt: ['werewolf + villager', '1'], potion: ['witch + villager + werewolf', '2'],
+      lovers: ['cupid + 2 any', '2'], pack: ['alpha wolf + 2 werewolves', '3'], guard: ['defender + villager/seer/witch/sister/hunter', '2'],
+      feast: ['vampire + 3 villagers', '4'], sisters: ['2 sisters', '2'], bullet: ['hunter + werewolf', '2'], banquet: ['cannibal + 5 villagers', '10'],
+    },
+    text: {
+      villager: 'Mob: 5 Villagers (+8).', seer: 'Vision: a Seer + 3 different Night characters (+3).', werewolf: 'Dinner: a Werewolf + a Villager (+1).',
+      witch: 'Potions: Witch + Villager + Werewolf (+2).', cupid: 'Lovers: Cupid + any 2 cards (+2).', 'alpha-wolf': 'Pack: Alpha Wolf + 2 Werewolves (+3).',
+      defender: 'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter (+2).', vampire: 'Feast: a Vampire + 3 Villagers (+4).', sister: 'Sisters: a pair of Sisters (+2).',
+      hunter: 'Hunt: a Hunter + a Werewolf (+2).', cannibal: 'Banquet: a Cannibal + 5 Villagers (+10).',
+    },
+    scoring:
+      'Every card scores its value, in a set or not: triple in your Day sets, single in your Night sets. A set adds its bonus on top (multiplied the same way). Each card counts in one set only.\n' +
+      'A lone Day card still scores, but another player can use it to complete a set and take it.\n' +
+      'Night characters have a moon on the card: Seer, Witch, Werewolf, Vampire and Alpha Wolf. All the others are Day characters.\n' +
+      'Card values: Villager 0, Cupid 0, Seer 1, Sister 1, Witch 2, Werewolf 2, Hunter 2, Alpha Wolf 3, Vampire 4, Cannibal 4; the Defender is worth the best card in its set (nothing alone).\n' +
+      'Set bonuses: Mob (5 Villagers) +8; Vision (a Seer + 3 different Night characters) +3; Dinner (Werewolf + Villager) +1; Potions (Witch + Villager + Werewolf) +2; Lovers (Cupid + any 2 cards) +2; Pack (Alpha Wolf + 2 Werewolves) +3; Defend (Defender + Villager, Seer, Witch, Sister or Hunter) +2; Feast (Vampire + 3 Villagers) +4; Sisters (2 Sisters) +2; Hunt (Hunter + Werewolf) +2; Banquet (Cannibal + 5 Villagers) +10.',
+  },
+};
+
+const WEREWOLF_TURN = {
+  pick:
+    'Setup: everyone gets 3 cards. Four cards are turned face up as the Day cards; the rest form the Night pile.\n' +
+    'On your turn take two actions (the same one twice is fine):\n' +
+    '1. Take one of the four Day cards into your hand - or, as the same action, play it straight to your Night sets (face down). The gap is refilled from the Night pile.\n' +
+    '2. Play a card from your hand face up to your Day sets.\n' +
+    '3. Play a card from your hand face down to your Night sets.\n' +
+    "4. Steal: put cards from your hand into another player's Day sets so that, together with their lone cards, they complete a set - you take that whole set, face down, to your Night sets. Each card you put down is one action.\n" +
+    'You never draw blind from the Night pile, and there is no swapping.\n' +
+    'Your Day cards are grouped into sets automatically, leaving as few cards alone as possible (and, if there is a choice, the least valuable ones). Grouped sets are safe.\n' +
+    'At the end of your turn you may hold at most 6 cards: discard any extra.',
+  draw:
+    'Setup: everyone gets 3 cards. Four cards are turned face up as the Day cards; the rest form the Night pile.\n' +
+    'On your turn take two actions (the same one twice is fine):\n' +
+    '1. Draw a card from the Night pile.\n' +
+    '2. Swap a card from your hand for one of the Day cards (yours takes its place).\n' +
+    '3. Play a card face up to your Day sets.\n' +
+    '4. Play a card face down to your Night sets.\n' +
+    "5. Steal: put cards from your hand into another player's Day sets so that, together with their lone cards, they complete a set - you take that whole set, face down, to your Night sets. Each card you put down is one action.\n" +
+    'Your Day cards are grouped into sets automatically, leaving as few cards alone as possible (and, if there is a choice, the least valuable ones). Grouped sets are safe.\n' +
+    'At the end of your turn you may hold at most 6 cards: discard any extra.',
+};
+
+const WEREWOLF_COMBOS = [
+  ['mob', 'Mob'], ['vision', 'Vision'], ['hunt', 'Dinner'], ['potion', 'Potions'], ['lovers', 'Lovers'], ['pack', 'Pack'],
+  ['guard', 'Defend'], ['feast', 'Feast'], ['sisters', 'Sisters'], ['bullet', 'Hunt'], ['banquet', 'Banquet'],
+];
+
+// The settings a scoring system changes, as variant paths for project p.
+function werewolfScoringSet(p, sys) {
+  const S = WEREWOLF_SCORING[sys];
+  const set = {
+    'automation.sets.cardsScore': S.cardsScore,
+    'automation.sets.zones.0.multiplier': S.dayMultiplier,
+    'rules.scoring': S.scoring,
+  };
+  p.cards.forEach((c, i) => {
+    if (!(c.id in S.value)) return;
+    set[`cards.${i}.stats.value`] = S.value[c.id];
+    set[`cards.${i}.description`] = S.value[c.id] === 'same' ? 'Wild: worth the best card it is with' : `Value ${S.value[c.id]}`;
+    set[`cards.${i}.rules`] = S.text[c.id];
+  });
+  p.automation.sets.combos.forEach((c, i) => {
+    if (!S.combos[c.id]) return;
+    set[`automation.sets.combos.${i}.pattern`] = S.combos[c.id][0];
+    set[`automation.sets.combos.${i}.points`] = S.combos[c.id][1];
+  });
+  return set;
+}
+
 export function werewolfProject() {
   const p = blankProject('Weirdwolves');
   p.theme = 'werewolf';
-  p.description = 'Collect village and werewolf cards and lay them as sets: face up by Day for double points (but others can finish and steal them), or face down by Night, safe and secret. Two actions a turn; most points when the Night pile runs out wins.';
+  p.description = 'Pick village and werewolf cards from the four face-up Day cards and lay them as sets: face up by Day for more points (but others can finish lone cards and take them), or face down by Night, safe and secret. Two actions a turn; most points when the Night pile runs out wins.';
   p.players = { min: 3, max: 4, default: 4 };
   p.cardBack = { color: '#1f2540', image: 'img/weirdwolves/back.webp', label: 'NIGHT' };
   p.zones = [
@@ -506,80 +619,62 @@ export function werewolfProject() {
       zones: [{ zone: 'day', multiplier: 2, secret: false }, { zone: 'night', multiplier: 1, secret: true }],
       giveZone: 'day',
       captureZone: 'night',
-      combos: [
-        { id: 'mob', label: 'Mob', pattern: '5 villagers', points: '' },
-        { id: 'vision', label: 'Vision', pattern: 'seer + 3 any distinct', points: '' },
-        { id: 'hunt', label: 'Dinner', pattern: 'werewolf + villager', points: '' },
-        { id: 'potion', label: 'Potions', pattern: 'witch + villager + werewolf', points: '' },
-        { id: 'lovers', label: 'Lovers', pattern: 'cupid + 2 any', points: '' },
-        { id: 'pack', label: 'Pack', pattern: 'alpha wolf + 2 werewolves', points: '' },
-        { id: 'guard', label: 'Defend', pattern: 'defender + villager/seer/witch/sister/hunter', points: '' },
-        { id: 'feast', label: 'Feast', pattern: 'vampire + 3 villagers', points: '' },
-        { id: 'sisters', label: 'Sisters', pattern: '2 sisters', points: '' },
-        { id: 'bullet', label: 'Hunt', pattern: 'hunter + werewolf', points: '' },
-      ],
+      combos: WEREWOLF_COMBOS.map(([id, label]) => ({ id, label, pattern: '', points: '' })),
       endWhenEmpty: 'round',
       arrange: 'auto',
+      // Cards are picked only from the four face-up Day cards: into the hand,
+      // or straight to the Night sets as the same action.
+      draw: false,
+      swap: false,
+      takeTo: ['hand', 'night'],
     },
   };
   p.rules = {
-    overview: 'A village by Day, a hunt by Night. Collect cards and lay them in front of you as sets: groups of cards that match the rule printed on a card.\nDay sets are laid face up and score double. Your Day cards group themselves into sets; finished sets are safe, but a card left on its own can be used by another player to complete a set - which they then take.\nNight sets are laid face down: they are safe, score single points and stay secret until the end.',
+    overview: 'A village by Day, a hunt by Night. Pick cards from the four face-up Day cards and lay them in front of you as sets: groups of cards that match the rule printed on a card.\nDay sets are laid face up and score more. Your Day cards group themselves into sets; finished sets are safe, but a card left on its own can be used by another player to complete a set - which they then take.\nNight sets are laid face down: they are safe, score single points and stay secret until the end.',
     objective: 'Have the most points when the Night pile runs out.',
-    turnRules:
-      'Setup: everyone gets 3 cards. Four cards are turned face up as the Day cards; the rest form the Night pile.\n' +
-      'On your turn take two actions (the same one twice is fine):\n' +
-      '1. Draw a card from the Night pile.\n' +
-      '2. Swap a card from your hand for one of the Day cards (yours takes its place).\n' +
-      '3. Play a card face up to your Day sets.\n' +
-      '4. Play a card face down to your Night sets.\n' +
-      "5. Steal: put cards from your hand into another player's Day sets so that, together with their lone cards, they complete a set - you take that whole set, face down, to your Night sets. Each card you put down is one action (e.g. two Villagers next to their Vampire and Villager make a Feast: two actions).\n" +
-      'Your Day cards are grouped into sets automatically, leaving as few cards alone as possible (and, if there is a choice, the least valuable ones). Grouped sets are safe.\n' +
-      'At the end of your turn you may hold at most 6 cards: discard any extra.',
-    endGame: 'When the Night pile runs out, play continues until everyone has had the same number of turns. Then the Night sets are revealed, and the highest total wins.',
-    scoring:
-      "Only cards in a set score. A set is worth the sum of its cards' values - doubled in your Day sets, single in your Night sets. Each card counts in one set only. Night sets are arranged for the most points; Day sets for the fewest lone cards.\n" +
-      'Mob: 5 Villagers (5).\n' +
-      'Vision: a Seer + 3 different cards (every role is different: Sisters and Hunters count too), e.g. Seer, Witch, Villager, Werewolf (9) or Seer, Seer, Werewolf, Cupid (7).\n' +
-      'Dinner: a Werewolf + 1 Villager (4).\n' +
-      'Potions: a Witch + a Villager + a Werewolf (7).\n' +
-      'Lovers: Cupid + any 2 cards (the two cards\' values).\n' +
-      'Pack: the Alpha Wolf + 2 Werewolves (10).\n' +
-      'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 6).\n' +
-      'The Defender is wild: in any set it is worth as much as the most valuable other card it is with, so its worth depends on what it is grouped with.\n' +
-      'Feast: a Vampire + 3 Villagers (8).\n' +
-      'Sisters: a pair of Sisters (6).\n' +
-      'Hunt: a Hunter + a Werewolf (5).',
-    aiHints: 'A Day card left on its own can be stolen; a set you finish within one turn is never at risk and scores double - for example play a Werewolf and a Villager. Look for steals that use two of your cards. Build big sets (Mob, Feast) face down in the Night. Watch other players\' loose Day cards for sets you can complete and take. Swap for Day cards that complete a set.',
+    turnRules: WEREWOLF_TURN.pick,
+    endGame: 'The Night pile refills the Day cards. When it runs out, play continues until everyone has had the same number of turns. Then the Night sets are revealed, and the highest total wins.',
+    scoring: '',
+    aiHints: 'A Day card left on its own can be taken by another player; a set you finish within one turn is never at risk - for example play a Werewolf and a Villager. Taking a Day card straight to your Night is safe and costs only one action. Look for steals that use two of your cards. Build big sets (Mob, Pack, Banquet) where they are safe. Watch other players\' lone Day cards for sets you can complete and take.',
   };
-  const card = (id, name, icon, value, count, color, description, rules) => ({
-    ...blankCard(p), id, name, icon, count, color, description, rules, startZone: 'nightpile', stats: { value }, tags: ['werewolf-sets'],
+  const card = (id, name, icon, count, color) => ({
+    ...blankCard(p), id, name, icon, count, color, description: '', rules: '', startZone: 'nightpile', stats: { value: 0 },
+    tags: ['werewolf-sets', NIGHT_ROLES.includes(id) ? 'night' : 'day'],
   });
   p.cards = [
-    card('villager', 'Villager', '🧑‍🌾', 1, 36, '#efe4c8', 'Value 1', 'Mob: 5 Villagers.'),
-    card('seer', 'Seer', '🔮', 2, 5, '#c9b8ee', 'Value 2', 'Vision: a Seer + 3 different cards.'),
-    card('werewolf', 'Werewolf', '🐺', 3, 16, '#b08a6e', 'Value 3', 'Dinner: a Werewolf + 1 lone Villager.'),
-    card('witch', 'Witch', '🧙', 3, 3, '#9cc58c', 'Value 3', 'Potions: Witch + Villager (saved) + Werewolf (poisoned).'),
-    card('cupid', 'Cupid', '💘', 0, 3, '#f6c2d6', 'Value 0', 'Lovers: Cupid + any 2 cards.'),
-    card('alpha-wolf', 'Alpha Wolf', '🌕', 4, 1, '#8c7a9e', 'Value 4', 'Pack: Alpha Wolf + 2 Werewolves.'),
-    card('defender', 'Defender', '🛡️', 'same', 3, '#a9c7e3', 'Wild: worth the best card it is with', 'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter.'),
-    card('vampire', 'Vampire', '🧛', 5, 4, '#d27a86', 'Value 5', 'Feast: a Vampire + 3 Villagers.'),
-    card('sister', 'Sister', '👭', 3, 4, '#f1c9a5', 'Value 3', 'Sisters: a pair of Sisters.'),
-    card('hunter', 'Hunter', '🏹', 2, 2, '#a9bf86', 'Value 2', 'Hunt: a Hunter + a Werewolf.'),
+    card('villager', 'Villager', '🧑‍🌾', 34, '#efe4c8'),
+    card('seer', 'Seer', '🔮', 5, '#c9b8ee'),
+    card('werewolf', 'Werewolf', '🐺', 20, '#b08a6e'),
+    card('witch', 'Witch', '🧙', 3, '#9cc58c'),
+    card('cupid', 'Cupid', '💘', 3, '#f6c2d6'),
+    card('alpha-wolf', 'Alpha Wolf', '🌕', 2, '#8c7a9e'),
+    card('defender', 'Defender', '🛡️', 3, '#a9c7e3'),
+    card('vampire', 'Vampire', '🧛', 4, '#d27a86'),
+    card('sister', 'Sister', '👭', 4, '#f1c9a5'),
+    card('hunter', 'Hunter', '🏹', 2, '#a9bf86'),
+    card('cannibal', 'Cannibal', '🍖', 2, '#c98a5a'),
   ];
-  // Finished card art (name, value and text are in the picture).
+  // Finished card art (name, value and text are in the picture). The Cannibal has none yet.
   for (const id of ['villager', 'seer', 'werewolf', 'witch', 'cupid', 'alpha-wolf', 'defender', 'vampire', 'sister', 'hunter']) {
     const c = p.cards.find((x) => x.id === id);
     c.image = `img/weirdwolves/${id}.webp`;
     c.imageMode = 'card';
   }
+  // The standard scoring, then the choices players get before a game.
+  const scoring = { sets: werewolfScoringSet(p, 'sets'), every: werewolfScoringSet(p, 'every') };
+  for (const [path, value] of Object.entries(scoring.sets)) setPath(p, path, value);
   p.variants = [
+    { id: 'scoring', label: 'Scoring', description: 'Sets score: only sets count, so it is about making them safely (and easy to add up). Every card scores: lone cards count too, sets add a bonus.', default: 0, choices: [
+      { label: WEREWOLF_SCORING.sets.label, set: scoring.sets },
+      { label: WEREWOLF_SCORING.every.label, set: scoring.every },
+    ] },
+    { id: 'pickup', label: 'Picking up cards', description: 'Where your cards come from.', default: 0, choices: [
+      { label: 'From the four Day cards (into your hand, or straight to Night)', set: { 'automation.sets.draw': false, 'automation.sets.swap': false, 'automation.sets.takeTo': ['hand', 'night'], 'rules.turnRules': WEREWOLF_TURN.pick } },
+      { label: 'Draw from the Night pile, or swap with a Day card (old rules)', set: { 'automation.sets.draw': true, 'automation.sets.swap': true, 'automation.sets.takeTo': [], 'rules.turnRules': WEREWOLF_TURN.draw } },
+    ] },
     { id: 'actions', label: 'Actions per turn', description: 'How many actions each player takes on their turn.', default: 0, choices: [
       { label: '2 actions (standard)', set: { 'automation.sets.actions': 2 } },
       { label: '3 actions (faster game)', set: { 'automation.sets.actions': 3 } },
-    ] },
-    { id: 'daymult', label: 'Day sets score', description: 'The reward for risking a face-up set.', default: 0, choices: [
-      { label: 'Double', set: { 'automation.sets.zones.0.multiplier': 2 } },
-      { label: 'Triple', set: { 'automation.sets.zones.0.multiplier': 3 } },
     ] },
     { id: 'arrange', label: 'Day sets', description: 'How your face-up cards become sets.', default: 0, choices: [
       { label: 'Grouped automatically (fewest lone cards)', set: { 'automation.sets.arrange': 'auto' } },
