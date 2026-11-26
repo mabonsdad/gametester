@@ -715,3 +715,23 @@ test('set collection: cards that always score, and Day cards swapped into the Da
   assert.equal(activePlayer(st).id, 'p2', 'two actions used');
   assert.match(checkAction(p, st, { type: 'take', with: st.zones.dayrow.cards[0], to: 'day', actor: 'p2' }), /only into your Night sets/);
 });
+
+test('set collection: picking only from the face-up cards (no blind draws, no swaps)', () => {
+  const p = normalizeProject(werewolfProject());
+  Object.assign(p.automation.sets, { draw: false, swap: false, takeTo: ['hand', 'night'] });
+  const st = createGame(p, { players: players4.slice(0, 3), seed: 6 });
+  const pid = activePlayer(st).id;
+  const lm = legalMoves(p, st, pid);
+  assert.ok(!lm.canDraw && !lm.options.some((o) => o.kind === 'draw' || o.kind === 'swap'));
+  assert.equal(lm.options.filter((o) => o.kind === 'take').length, 8, '4 Day cards x (hand, Night)');
+  assert.match(checkAction(p, st, { type: 'draw', actor: pid }), /face-up cards instead/);
+  const [a, b] = st.zones.dayrow.cards;
+  const pile = st.zones.nightpile.cards.length;
+  apply(p, st, { type: 'take', with: a, to: 'hand', actor: pid });
+  assert.equal(st.cards[a].zone, `${pid}.hand`);
+  apply(p, st, { type: 'take', with: b, to: 'night', actor: pid });
+  assert.equal(st.cards[b].zone, `${pid}.night`);
+  assert.equal(st.zones.dayrow.cards.length, 4);
+  assert.equal(st.zones.nightpile.cards.length, pile - 2);
+  assert.notEqual(activePlayer(st).id, pid, 'one action each');
+});

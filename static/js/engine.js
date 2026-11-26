@@ -1148,7 +1148,9 @@ const SETS_DEFAULTS = {
   // exchange for a card from your hand (one action), takeTo = without a swap,
   // the gap refilled from the draw pile (one action).
   swapTo: [],
-  takeTo: [],
+  takeTo: [], // may include 'hand': take a face-up card into your hand
+  draw: true, // false: no drawing blind from the draw pile (it only refills the face-up cards)
+  swap: true, // false: no swapping a hand card for a face-up card
 };
 export const setsCfg = (project) => ({ ...SETS_DEFAULTS, ...(automation(project).sets || {}) });
 const setsC = (project) => compileSets(project, setsCfg(project));
@@ -1470,6 +1472,7 @@ function setsApply(project, st, a, actor) {
   if (H.discarding && !(a.type === 'move' && to && to === discardZ)) throw new Error(`Discard down to ${limit} cards first.`);
   if (!H.discarding && H.actionsUsed >= S.actions) throw new Error('You have no actions left this turn.');
   if (a.type === 'draw') {
+    if (S.draw === false) throw new Error(`Take one of the face-up cards instead: there is no drawing from the ${st.zones[S.drawZone]?.name || 'draw pile'}.`);
     const deck = st.zones[S.drawZone];
     const top = deck?.cards[deck.cards.length - 1];
     if (!top) throw new Error(`The ${deck?.name || 'draw pile'} is empty.`);
@@ -1480,6 +1483,7 @@ function setsApply(project, st, a, actor) {
     return;
   }
   if (a.type === 'swap') {
+    if (S.swap === false) throw new Error('There is no swapping in this game.');
     const mine = st.cards[a.card];
     const theirs = st.cards[a.with];
     const market = st.zones[S.marketZone];
@@ -1788,7 +1792,7 @@ function setsLegal(project, st, pid, out) {
     return out;
   }
   const deck = st.zones[S.drawZone];
-  out.canDraw = !!deck?.cards.length;
+  out.canDraw = S.draw !== false && !!deck?.cards.length;
   if (out.canDraw) out.options.push({ kind: 'draw', label: `Draw a card from the ${deck.name}`, action: { type: 'draw' }, gain: 0 });
   const market = st.zones[S.marketZone]?.cards || [];
   const marketName = st.zones[S.marketZone]?.name || 'market';
@@ -1825,8 +1829,8 @@ function setsLegal(project, st, pid, out) {
         action: { type: 'move', card: u, to: x.zid },
       });
     });
-    for (const m of market) out.options.push({ kind: 'swap', card: u, with: m, gain: 0, label: `Swap for ${nm(m)} (${marketName})`, action: { type: 'swap', card: u, with: m } });
-    for (const z of S.swapTo || []) {
+    if (S.swap !== false) for (const m of market) out.options.push({ kind: 'swap', card: u, with: m, gain: 0, label: `Swap for ${nm(m)} (${marketName})`, action: { type: 'swap', card: u, with: m } });
+    if (S.swap !== false) for (const z of S.swapTo || []) {
       const zid = `${pid}.${z}`;
       if (!st.zones[zid]) continue;
       for (const m of market) out.options.push({ kind: 'swap', card: u, with: m, to: zid, gain: 0, label: `Swap for ${nm(m)} (${marketName}) and put it straight into your ${zoneDef(project, z)?.name}`, action: { type: 'swap', card: u, with: m, to: zid } });
@@ -1835,7 +1839,8 @@ function setsLegal(project, st, pid, out) {
   for (const z of S.takeTo || []) {
     const zid = `${pid}.${z}`;
     if (!st.zones[zid]) continue;
-    for (const m of market) out.options.push({ kind: 'take', with: m, to: zid, gain: 0, label: `Take ${nm(m)} from the ${marketName} straight into your ${zoneDef(project, z)?.name}`, action: { type: 'take', with: m, to: zid } });
+    const into = z === 'hand' ? 'into your hand' : `straight into your ${zoneDef(project, z)?.name}`;
+    for (const m of market) out.options.push({ kind: 'take', with: m, to: zid, gain: 0, label: `Take ${nm(m)} from the ${marketName} ${into}`, action: { type: 'take', with: m, to: zid } });
   }
   // Steals that need more than one card (one action per card). Single-card
   // steals are the 'give' options above.
@@ -1865,7 +1870,7 @@ function checkSets(project, st, action, actor) {
   const lm = legalMoves(project, st, actor);
   switch (action.type) {
     case 'draw':
-      return lm.discarding ? `Discard down to ${lm.handLimit} cards first.` : !lm.actionsLeft ? 'You have no actions left - end your turn.' : !lm.canDraw ? 'The draw pile is empty.' : null;
+      return lm.discarding ? `Discard down to ${lm.handLimit} cards first.` : !lm.actionsLeft ? 'You have no actions left - end your turn.' : S.draw === false ? 'Take one of the face-up cards instead: there is no drawing from the pile in this game.' : !lm.canDraw ? 'The draw pile is empty.' : null;
     case 'swap':
     case 'move': {
       const to = action.type === 'move' ? resolveZone(st, action.to, actor) : null;
