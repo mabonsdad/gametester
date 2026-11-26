@@ -416,6 +416,7 @@ function colourHex(colour) {
 // ================================================================ rendering
 function render() {
   if (!st) return;
+  if (drag) { renderWaiting = true; return; } // redraw when the drag ends
   const winners = st.result?.winners || [];
   if (feedOpen) feedSeen = feedTotal;
   app.replaceChildren(h('div', { class: `pv ${feedOpen ? 'feed-open' : ''}` },
@@ -597,7 +598,7 @@ function oppSets(p) {
     }
     const o = opts.find((x) => x.to === zid);
     return h('div', {
-      class: `pv-opp-zone pv-zone-def-${z.zone} ${o ? 'pv-target' : ''}`, title: o ? o.label : '',
+      class: `pv-opp-zone pv-zone-def-${z.zone} ${o ? 'pv-target' : ''}`, title: o ? o.label : '', dataset: { zone: zid },
       onclick: o ? () => act(o.action) : null,
     }, h('span', { class: 'pv-zone-label' }, name, o ? h('b', { class: 'pv-target-hint' }, ` ← ${o.label}`) : null), trickGroups(zid, { compact: true }));
   }));
@@ -610,8 +611,8 @@ function mySets() {
     const o = opts.find((x) => x.kind === 'play' && x.to === zid);
     const def = zoneDef(game, z.zone);
     const points = zoneTricks(game, st, zid).total * (Number(z.multiplier) || 1);
-    return h('div', { class: `pv-my-zone pv-zone-def-${z.zone} ${o ? 'pv-target' : ''} ${o?.gain > 0 ? 'scores' : ''}`, onclick: o ? () => act(o.action) : null, title: o ? o.label : '' },
-      h('div', { class: 'pv-zone-label' }, h('b', {}, def.name), ` ×${Number(z.multiplier) || 1}${def.faceUp === false ? ' · face down, secret until the end' : ' · face up'} · ${points} pts`,
+    return h('div', { class: `pv-my-zone pv-zone-def-${z.zone} ${o ? 'pv-target' : ''} ${o?.gain > 0 ? 'scores' : ''}`, dataset: { zone: zid }, onclick: o ? () => act(o.action) : null, title: o ? o.label : '' },
+      h('div', { class: 'pv-zone-label' }, h('b', {}, def.name), ` ×${Number(z.multiplier) || 1}`, h('span', { class: 'pv-zone-desc' }, def.faceUp === false ? ' · face down, secret until the end' : ' · face up'), ` · ${points} pts`,
         o ? h('b', { class: 'pv-target-hint' }, o.gain > 0 ? ` ← tap to play: +${o.gain}` : ' ← tap to play here') : null),
       trickGroups(zid));
   }));
@@ -625,6 +626,7 @@ function zoneView(zid) {
   const lm = myTurn() ? legalMoves(game, st, HUMAN) : null;
   const drawPile = (isShedding(game) && zid === automation(game).shedding.drawZone) || (isSets(game) && zid === setsCfg(game).drawZone);
   const market = isSets(game) && zid === setsCfg(game).marketZone;
+  const discard = isSets(game) && zid === setsCfg(game).discardZone;
   const cardEl = (u) => {
     const d = cardDef(game, st, u);
     return isVisibleTo(game, st, u, HUMAN) && d ? infoOnClick(cardFace(d), d) : cardBack(game);
@@ -644,7 +646,8 @@ function zoneView(zid) {
       el.title = lm?.takeCount ? `Take ${lm.takeCount} cards` : 'Draw a card';
       el.addEventListener('click', () => (isAutomated(game) ? act({ type: 'draw' }) : act({ type: 'draw', from: zid })));
     }
-    body = h('div', { class: 'pv-pile', style: { '--depth': Math.min(6, Math.ceil(z.cards.length / 8)) } }, el);
+    body = h('div', { class: 'pv-pile', style: { '--depth': Math.min(6, Math.ceil(z.cards.length / 8)) }, title: `${z.name}: ${z.cards.length} card${z.cards.length === 1 ? '' : 's'}` }, el,
+      isSets(game) && drawPile ? h('span', { class: 'pv-pile-count' }, h('b', {}, z.cards.length), h('small', {}, z.cards.length === 1 ? 'card left' : 'cards left')) : null);
   } else if (market) {
     const swaps = selOptions().filter((o) => o.kind === 'swap');
     const takes = !sel && lm?.options && !lm.discarding ? lm.options.filter((o) => o.kind === 'take') : [];
@@ -652,18 +655,26 @@ function zoneView(zid) {
       const el = cardEl(u);
       const o = swaps.find((x) => x.with === u);
       const t = takes.filter((x) => x.with === u);
+      el.dataset.card = u;
       if (o) { el.classList.add('pv-drawable'); el.title = `Swap your ${cname(sel)} for ${cname(u)}`; el.addEventListener('click', () => act(o.action)); }
-      else if (t.length) { el.classList.add('pv-drawable'); el.title = `Take ${cname(u)}`; el.addEventListener('click', () => takeMenu(u, t)); }
+      else if (t.length) {
+        el.classList.add('pv-drawable', 'pv-draggable');
+        el.title = `${cname(u)}: ${dragHint(u, 'market')} (or tap it)`;
+        el.addEventListener('click', () => takeMenu(u, t));
+        el.addEventListener('pointerdown', (e) => startPress(e, u, 'market', el));
+      }
       else if (myTurn() && swaps.length) el.title = 'To swap: tap a card in your hand, then tap this card';
       return el;
     }) : h('div', { class: 'pv-empty' }, 'empty');
   } else {
     body = z.cards.length ? z.cards.map(cardEl) : h('div', { class: 'pv-empty' }, 'empty');
   }
+  const role = isSets(game) ? (drawPile ? 'pv-role-draw' : market ? 'pv-role-market' : discard ? 'pv-role-discard' : '') : '';
+  const label = isSets(game) && (drawPile || market) ? null : h('div', { class: 'pv-zone-label' }, z.name, def.layout === 'stack' ? h('span', { class: 'pv-count' }, z.cards.length) : null);
   const extra = isShedding(game) && H && zid === automation(game).shedding.discardZone && H.colour
     ? h('div', { class: 'colour-chip', style: { background: colourHex(H.colour) } }, `Colour: ${H.colour}`) : null;
-  return h('div', { class: `pv-zone pv-zone-def-${z.defId} layout-${def.layout || 'spread'} ${trickZone ? 'trick' : ''}` },
-    h('div', { class: 'pv-zone-label' }, z.name, def.layout === 'stack' ? h('span', { class: 'pv-count' }, z.cards.length) : null),
+  return h('div', { class: `pv-zone pv-zone-def-${z.defId} layout-${def.layout || 'spread'} ${trickZone ? 'trick' : ''} ${role}`, dataset: { zone: zid } },
+    label,
     h('div', { class: 'pv-zone-cards' }, body), extra);
 }
 
@@ -737,11 +748,8 @@ function myArea() {
     for (const o of lm.options.filter((x) => x.kind === 'retire')) actions.push(h('button', { class: 'btn', onclick: () => act(o.action) }, `🌙 ${o.label}`));
   } else if (myTurn() && sets && lm?.options) {
     if (!lm.discarding) {
-      for (const o of selOptions().filter((x) => x.kind !== 'swap')) {
-        actions.push(h('button', { class: `btn ${o.gain > 0 ? 'primary' : ''}`, onclick: () => act(o.action) }, o.kind === 'give' ? `🗡 ${o.label}` : o.label));
-      }
-      if (sel && selOptions().some((x) => x.kind === 'swap')) actions.push(h('span', { class: 'pv-hint' }, `…or tap one of the ${st.zones[setsCfg(game).marketZone]?.name || 'face-up cards'} to swap`));
-      if (sel) actions.push(h('button', { class: 'btn small', onclick: () => { sel = null; render(); } }, 'Cancel'));
+      // Where a picked-up card can go is shown on the zones themselves (tap one, or drag the card there).
+      if (sel) actions.push(h('button', { class: 'btn small', onclick: () => { sel = null; render(); } }, 'Put it back'));
       if (!sel && lm.canDraw) actions.push(h('button', { class: 'btn', onclick: () => act({ type: 'draw' }) }, `Draw from the ${st.zones[setsCfg(game).drawZone]?.name || 'pile'}`));
       if (!sel) actions.push(h('button', { class: `btn ${lm.actionsLeft ? '' : 'primary'}`, onclick: () => act({ type: 'endTurn' }) }, lm.actionsLeft ? 'End turn early' : 'End turn'));
     }
@@ -758,7 +766,7 @@ function myArea() {
     actions.unshift(h('button', { class: 'btn catch-btn pv-catch', onclick: () => act({ type: 'catch' }) }, `Catch ${player(st, st.catchable.pid).name}! (didn't say "${st.catchable.label}")`));
   }
   const tip = st.status !== 'playing' ? '' : st.pending ? '' : myTurn()
-    ? (sets && lm?.options ? (lm.retiring ? lm.summary : lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones${lm.options.some((o) => o.kind === 'give' || o.kind === 'steal') ? ', a highlighted opponent' : ''}${lm.options.some((o) => o.kind === 'swap') ? ', or a face-up card to swap' : ''}.` : `${lm.summary} Tap a card in your hand to use it${lm.options.some((o) => o.kind === 'take') ? `, or tap one of the ${st.zones[setsCfg(game).marketZone]?.name || 'face-up cards'} to take it` : lm.canDraw ? ', or draw' : ''}.${lm.canStack ? ' You have an unstacked set: tap 🔒 Stack to protect it (free).' : ''}${lm.options.some((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0) ? ' 🗡 You can take a set from another player - see the buttons on their panel.' : ''}`)
+    ? (sets && lm?.options ? (lm.retiring ? lm.summary : lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: tap where it goes - one of your glowing zones${lm.options.some((o) => o.kind === 'give' && o.card === sel) ? ' or a glowing opponent' : ''}${lm.options.some((o) => o.kind === 'swap') ? ', or a face-up card to swap' : ''}.` : `${lm.summary} Drag cards to where they go (or tap them).${lm.canStack ? ' You have an unstacked set: tap 🔒 Stack to protect it (free).' : ''}${lm.options.some((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0) ? ' 🗡 You can take a set from another player - see the buttons on their panel.' : ''}`)
       : lm ? `${lm.summary}${lm.legal.length ? ' Tap a highlighted card to play it.' : ''}` : 'Tap a card to play it, or draw from a pile; then end your turn.')
     : 'Waiting for the other players…';
   const chips = [];
@@ -770,7 +778,7 @@ function myArea() {
     if (b.hidden) chips.push(h('span', { class: 'pv-chip', title: 'Points in your face-down zones: only you know about them until the end' }, `+${b.hidden} hidden`));
   }
   const manualScore = !(automation(game).autoScore && automation(game).scoring.length);
-  return h('section', { class: `pv-me ${myTurn() ? 'turn' : ''}` },
+  return h('section', { class: `pv-me ${myTurn() ? 'turn' : ''} ${sets ? 'pv-me-sets' : ''}` },
     h('div', { class: 'pv-me-head' },
       h('span', { class: 'pv-avatar small', style: { '--hue': 140 } }, avatars[HUMAN]),
       h('b', {}, p.name),
@@ -779,22 +787,28 @@ function myArea() {
       chips,
       others.map((z) => h('span', { class: 'pv-chip', title: st.zones[z].name }, `${zoneDef(game, st.zones[z].defId).name}: ${st.zones[z].cards.length} card${st.zones[z].cards.length === 1 ? '' : 's'}`))),
     sets ? mySets() : null,
-    sel && st.cards[sel] ? pickedInfo(cardDef(game, st, sel)) : null,
-    tip ? h('p', { class: 'pv-tip' }, tip) : null,
-    actions.length ? h('div', { class: 'pv-actions' }, actions) : null,
-    h('div', { class: `pv-hand ${cards.length > 9 ? 'many' : ''}` }, cards.map((u) => {
+    h('div', { class: 'pv-me-info' },
+      sel && st.cards[sel] ? pickedInfo(cardDef(game, st, sel)) : null,
+      tip ? h('p', { class: 'pv-tip' }, tip) : null,
+      actions.length ? h('div', { class: 'pv-actions' }, actions) : null),
+    h('div', { class: `pv-hand ${cards.length > 9 ? 'many' : ''}`, dataset: { zone: handZ } }, cards.map((u) => {
       const d = cardDef(game, st, u);
       const el = cardFace(d);
       el.dataset.card = u;
       el.classList.add('pv-card');
       if (sel === u) el.classList.add('picked');
       if (lm) {
-        if (lm.cards[u]) { el.classList.add('no'); el.title = `${cardText(d)}\n${lm.cards[u]}`; } else { el.classList.add('ok'); el.title = `${cardText(d)}\n${lm.discarding ? 'Tap to discard' : lm.options ? 'Tap to pick up' : 'Tap to play'}`; }
+        if (lm.cards[u]) { el.classList.add('no'); el.title = `${cardText(d)}\n${lm.cards[u]}`; } else { el.classList.add('ok'); el.title = `${cardText(d)}\n${lm.discarding ? 'Tap to discard' : lm.options ? `${dragHint(u, 'hand')} (or tap, then choose)` : 'Tap to play'}`; }
       } else if (myTurn()) {
         el.classList.add('ok');
       }
-      if (myTurn()) el.addEventListener('click', () => playCard(u));
-      else infoOnClick(el, d);
+      if (myTurn()) {
+        el.addEventListener('click', () => playCard(u));
+        if (sets && lm?.options && !lm.discarding && !lm.cards[u]) {
+          el.classList.add('pv-draggable');
+          el.addEventListener('pointerdown', (e) => startPress(e, u, 'hand', el));
+        }
+      } else infoOnClick(el, d);
       return el;
     })));
 }
@@ -911,6 +925,127 @@ function cheatSheet() {
       secret.length ? h('li', {}, `${secret.join(' and ')} stay face down and are scored at the end.`) : null));
 }
 
+// ================================================================ drag and drop
+// Hand cards and the face-up Day cards can be dragged to where they go (a tap
+// still works: pick the card up, then tap a zone). Pointer events, so a finger
+// works as well as a mouse.
+let drag = null; // { u, from, el, targets: [{ el, option }], sx, sy, moved, over, ghost, tip }
+let renderWaiting = false;
+let noClickUntil = 0; // the click that ends a drag is not a tap
+
+// Where card u (from 'hand' or 'market') can go now: one option per place.
+function dragOptions(u, from) {
+  const lm = myTurn() ? legalMoves(game, st, HUMAN) : null;
+  if (!lm?.options || lm.retiring || lm.discarding) return [];
+  const opts = from === 'market'
+    ? lm.options.filter((o) => o.kind === 'take' && o.with === u)
+    : lm.options.filter((o) => o.card === u && ['play', 'give', 'swap'].includes(o.kind));
+  const byPlace = new Map();
+  for (const o of opts) {
+    const place = o.kind === 'swap' ? `card:${o.with}` : `zone:${o.to}`;
+    const had = byPlace.get(place);
+    if (!had || (o.stack && !had.stack)) byPlace.set(place, o); // stacking keeps a finished set safe
+  }
+  return [...byPlace.entries()].map(([place, option]) => ({ place, option }));
+}
+
+function placeName(o) {
+  if (o.kind === 'swap') return `a ${st.zones[setsCfg(game).marketZone]?.name || 'face-up'} card to swap`;
+  const z = st.zones[o.to];
+  if (!z) return '';
+  const name = z.defId === 'hand' ? 'hand' : zoneDef(game, z.defId)?.name || z.name;
+  return z.owner === HUMAN ? `your ${name}` : `${player(st, z.owner).name}'s ${name}`;
+}
+
+function dragHint(u, from) {
+  const opts = dragOptions(u, from).map((x) => x.option);
+  if (!opts.length) return '';
+  const mine = [...new Set(opts.filter((o) => o.kind !== 'give').map(placeName))];
+  const theirs = opts.filter((o) => o.kind === 'give');
+  const list = mine.length > 1 ? `${mine.slice(0, -1).join(', ')} or ${mine[mine.length - 1]}` : mine[0] || '';
+  return `Drag to ${list}${theirs.length ? `${list ? ', or ' : ''}onto ${theirs.length === 1 ? placeName(theirs[0]) : 'a glowing opponent'} to complete their set and take it` : ''}`;
+}
+
+function startPress(e, u, from, el) {
+  if (drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  const targets = dragOptions(u, from).map(({ place, option }) => {
+    const [kind, id] = place.split(/:(.*)/);
+    return { el: app.querySelector(kind === 'card' ? `[data-card="${id}"]` : `[data-zone="${id}"]`), option };
+  }).filter((t) => t.el);
+  if (!targets.length) return;
+  drag = { u, from, el, targets, sx: e.clientX, sy: e.clientY, moved: false, over: null, ghost: null, tip: null };
+  // A Day card shows where it can go as soon as it is pressed.
+  if (from === 'market') showDragTip(e.clientX, e.clientY, dragHint(u, from));
+  window.addEventListener('pointermove', dragMove, { passive: false });
+  window.addEventListener('pointerup', dragEnd);
+  window.addEventListener('pointercancel', dragCancel);
+}
+
+function showDragTip(x, y, text) {
+  if (!drag) return;
+  if (!drag.tip) { drag.tip = h('div', { class: 'pv-drag-tip' }); document.body.append(drag.tip); }
+  drag.tip.textContent = text;
+  const w = drag.tip.offsetWidth;
+  drag.tip.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, x - w / 2))}px`;
+  drag.tip.style.top = `${Math.max(8, y - (drag.moved ? 110 : 64))}px`;
+}
+
+function dragMove(e) {
+  if (!drag) return;
+  if (!drag.moved) {
+    if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 8) return;
+    drag.moved = true;
+    const r = drag.el.getBoundingClientRect();
+    drag.ghost = drag.el.cloneNode(true);
+    drag.ghost.classList.add('pv-ghost');
+    Object.assign(drag.ghost.style, { width: `${r.width}px`, height: `${r.height}px` });
+    document.body.append(drag.ghost);
+    drag.el.classList.add('pv-drag-source');
+    for (const t of drag.targets) t.el.classList.add('pv-drop');
+    document.body.classList.add('pv-dragging');
+  }
+  e.preventDefault();
+  const r = drag.ghost.getBoundingClientRect();
+  drag.ghost.style.left = `${e.clientX - r.width / 2}px`;
+  drag.ghost.style.top = `${e.clientY - r.height * 0.6}px`;
+  const hit = document.elementFromPoint(e.clientX, e.clientY);
+  const over = (hit && drag.targets.find((t) => t.el === hit || t.el.contains(hit))) || null;
+  if (over !== drag.over) {
+    drag.over?.el.classList.remove('pv-drop-over');
+    over?.el.classList.add('pv-drop-over');
+    drag.over = over;
+  }
+  showDragTip(e.clientX, e.clientY, over ? over.option.label : dragHint(drag.u, drag.from));
+}
+
+function dragEnd() {
+  const d = drag;
+  stopDrag();
+  if (!d?.moved) return; // a tap: the click handler takes it from here
+  noClickUntil = Date.now() + 350;
+  if (d.over) { sel = null; act(d.over.option.action); }
+}
+
+function dragCancel() { stopDrag(); }
+
+function stopDrag() {
+  if (!drag) return;
+  window.removeEventListener('pointermove', dragMove);
+  window.removeEventListener('pointerup', dragEnd);
+  window.removeEventListener('pointercancel', dragCancel);
+  drag.ghost?.remove();
+  drag.tip?.remove();
+  drag.el.classList.remove('pv-drag-source');
+  for (const t of drag.targets) t.el.classList.remove('pv-drop', 'pv-drop-over');
+  document.body.classList.remove('pv-dragging');
+  drag = null;
+  if (renderWaiting) { renderWaiting = false; render(); }
+}
+
+app.addEventListener('click', (e) => {
+  if (Date.now() < noClickUntil) { e.stopPropagation(); e.preventDefault(); }
+}, true);
+
 // ================================================================ dialogs
 function showRules() {
   tele('rulesOpened');
@@ -967,7 +1102,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // "&debug=1" in the address exposes the game for automated tests.
-if (/(?:^|[#&])debug=1/.test(location.hash)) window.__pv = { get st() { return st; }, get game() { return game; }, render };
+if (/(?:^|[#&])debug=1/.test(location.hash)) window.__pv = { get st() { return st; }, get game() { return game; }, render, act, legal: () => legalMoves(game, st, HUMAN) };
 
 boot();
 watchVersion(() => showReloadBar('A new version of this game has been published - reload to use it.'));
