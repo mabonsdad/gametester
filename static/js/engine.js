@@ -1853,7 +1853,9 @@ function setsLegal(project, st, pid, out) {
     });
   }
   out.options.push({ kind: 'end', label: 'End your turn now', action: { type: 'endTurn' } });
-  const can = [out.canDraw ? 'draw a card' : '', market.length ? `swap a card with one of the ${marketName}` : '', 'play a card to your sets',
+  const takes = out.options.filter((o) => o.kind === 'take');
+  const can = [out.canDraw ? 'draw a card' : '', takes.length ? `take one of the ${marketName}${takes.some((o) => st.zones[o.to]?.defId !== 'hand') ? ` (into your hand, or straight to your ${[...new Set(takes.filter((o) => st.zones[o.to]?.defId !== 'hand').map((o) => zoneDef(project, st.zones[o.to].defId)?.name))].join(' or ')})` : ''}` : '',
+    market.length && out.options.some((o) => o.kind === 'swap') ? `swap a card with one of the ${marketName}` : '', hand.length ? 'play a card to your sets' : '',
     out.options.some((o) => o.kind === 'give' || o.kind === 'steal') ? "complete a set in another player's zone and take it" : ''].filter(Boolean);
   out.summary = `${out.actionsLeft} action${out.actionsLeft === 1 ? '' : 's'} left: ${can.join(', ')}.`;
   return out;
@@ -1901,15 +1903,18 @@ function checkSets(project, st, action, actor) {
   }
 }
 
-// A simple heuristic player for set-collection games (the "quick bot").
-// Returns the actions for the rest of the turn, stopping after a draw (the
-// drawn card is not known until it is drawn).
+// The quick bot for set-collection games: it looks up to two actions ahead
+// and scores each position by its points, the sets its cards could still make
+// and the risk of leaving lone cards where other players can take them.
+// Returns the actions for the rest of the turn, stopping after a blind draw
+// (the drawn card is not known until it is drawn).
 export function setsBotTurn(project, st, pid) {
   const sim = clone({ ...st, log: [], timeline: [] });
   const out = [];
+  const ctx = botContext(project);
   for (let k = 0; k < 12; k++) {
     if (sim.status !== 'playing' || activePlayer(sim).id !== pid) break;
-    const a = setsBotChoice(project, sim, pid);
+    const a = setsBotChoice(project, sim, pid, ctx);
     if (!a) break;
     out.push(a);
     try { apply(project, sim, { ...a, actor: pid }); } catch { break; }
@@ -1918,92 +1923,139 @@ export function setsBotTurn(project, st, pid) {
   return out;
 }
 
-function setsBotChoice(project, st, pid) {
+function botContext(project) {
+  const total = project.cards.reduce((a, c) => a + (Number(c.count) || 0), 0) || 1;
+  // Chance that at least one of the other players holds a card of each type.
+  const odds = Object.fromEntries(project.cards.map((c) => [c.id, 1 - (1 - (Number(c.count) || 0) / total) ** 13]));
+  return { C: setsC(project), types: project.cards.map((c) => c.id), odds };
+}
+
+const botSim = (project, st, pid, a) => {
+  const s = clone({ ...st, log: [], timeline: [] });
+  apply(project, s, { ...a, actor: pid });
+  return s;
+};
+
+// What other players could take from pid's lone cards in the give zone.
+function botExposure(project, st, pid, ctx) {
   const S = setsCfg(project);
-  const C = setsC(project);
+  const zid = `${pid}.${S.giveZone}`;
+  if (!S.giveZone || !st.zones[zid]) return 0;
+  const { C, types, odds } = ctx;
+  const lone = zoneTricks(project, st, zid).lone.map((u) => st.cards[u].defId);
+  if (!lone.length) return 0;
+  const base = S.cardsScore ? (ids) => ids.reduce((a, d) => a + (C.wild.has(d) ? 0 : C.values[d] || 0), 0) : () => 0;
+  const common = types.slice().sort((a, b) => odds[b] - odds[a]).slice(0, 4);
+  let worst = 0;
+  for (const t of types) {
+    const b = bestTrickUsing(C, lone, [t]);
+    if (b) worst = Math.max(worst, (b.points + base(b.defIds)) * odds[t]);
+  }
+  if (S.actions > 1) {
+    for (const t of common) for (const u of common) {
+      const b = bestTrickUsing(C, lone, [t, u]);
+      if (b) worst = Math.max(worst, (b.points + base(b.defIds)) * odds[t] * odds[u] * 0.7);
+    }
+  }
+  return worst * 1.6; // the owner loses the cards, another player gains the set
+}
+
+// The sets pid's free cards could still make: in the give zone (worth more
+// when fewer cards are still needed, as an unfinished set there can be taken)
+// or in the safe zone.
+function botPotential(project, st, pid, ctx, safeZ) {
+  const S = setsCfg(project);
+  const { C } = ctx;
+  const hand = st.zones[`${pid}.hand`].cards.map((u) => st.cards[u].defId);
+  const zones = scoreZones(project);
+  const dayZ = `${pid}.${S.giveZone}`;
+  const dayS = zones.find((z) => z.zone === S.giveZone);
+  let dayPot = 0;
+  if (dayS && st.zones[dayZ]) {
+    const lone = zoneTricks(project, st, dayZ).lone.map((u) => st.cards[u].defId);
+    const limit = Number(S.zoneLimits?.[S.giveZone]) || 99;
+    for (const t of bestTricks(C, [...lone, ...hand]).tricks) {
+      const pool = lone.slice();
+      const k = t.defIds.filter((d) => { const i = pool.indexOf(d); if (i >= 0) { pool.splice(i, 1); return false; } return true; }).length;
+      const turns = Math.ceil(k / Math.max(1, Math.min(limit, S.actions || 2)));
+      dayPot += t.points * mult(dayS) * 0.8 * 0.55 ** Math.max(0, turns - 1);
+    }
+  }
+  let nightPot = 0;
+  const safeS = safeZ && zones.find((z) => `${pid}.${z.zone}` === safeZ);
+  if (safeS) nightPot = bestTricks(C, [...zoneTricks(project, st, safeZ).loose.map((u) => st.cards[u].defId), ...hand]).total * mult(safeS) * 0.8;
+  const handBase = S.cardsScore ? hand.reduce((a, d) => a + (C.wild.has(d) ? 0 : C.values[d] || 0), 0) : 0;
+  return Math.max(dayPot, nightPot) + handBase;
+}
+
+function botValue(project, st, pid, ctx, safeZ) {
+  const b = setsBreakdown(project, st, pid);
+  const hand = st.zones[`${pid}.hand`].cards.length;
+  let v = b.total + 0.5 * botPotential(project, st, pid, ctx, safeZ) + 0.2 * hand;
+  if (st.status === 'playing') v -= botExposure(project, st, pid, ctx);
+  return v;
+}
+
+function setsBotChoice(project, st, pid, ctx = botContext(project)) {
   const lm = legalMoves(project, st, pid);
   if (!lm) return null;
-  const def = (u) => st.cards[u].defId;
-  const hand = st.zones[`${pid}.hand`].cards;
-  const handDefs = hand.map(def);
   const zones = scoreZones(project);
   const safe = zones.find((z) => z.secret) || zones.slice().sort((a, b) => mult(a) - mult(b))[0];
   const safeZ = safe ? `${pid}.${safe.zone}` : null;
-  const safeLoose = safeZ && st.zones[safeZ] ? zoneTricks(project, st, safeZ).loose.map(def) : [];
-  const plan = (cards) => bestTricks(C, [...cards, ...safeLoose]).total;
-  const find = (pred) => lm.options.find(pred)?.action || null;
-  // Stacking is free: protect every finished face-up trick straight away.
+  const value = (s) => botValue(project, s, pid, ctx, safeZ);
+  const pickBest = (opts) => {
+    let best = null;
+    for (const o of opts) {
+      let v;
+      try { v = value(botSim(project, st, pid, o.action)); } catch { continue; }
+      if (!best || v > best.v) best = { v, a: o.action };
+    }
+    return best?.a || null;
+  };
+  // Stacking is free: protect every finished face-up set straight away.
   const stack = lm.options.find((o) => o.kind === 'stack');
   if (stack) return stack.action;
-  if (lm.retiring) {
-    // Too many sets: move the least valuable one.
-    return lm.options.filter((o) => o.kind === 'retire').sort((x, y) => x.points - y.points)[0]?.action || null;
-  }
-  if (lm.discarding) {
-    let pick = null; let bestLeft = -1;
-    for (const [i, u] of hand.entries()) {
-      const left = plan(handDefs.filter((_, j) => j !== i)) * 100 - (C.values[def(u)] || 0);
-      if (left > bestLeft) { bestLeft = left; pick = u; }
-    }
-    return find((o) => o.kind === 'discard' && o.card === pick);
-  }
+  if (lm.retiring) return pickBest(lm.options.filter((o) => o.kind === 'retire'));
+  if (lm.discarding) return pickBest(lm.options.filter((o) => o.kind === 'discard'));
   if (!lm.actionsLeft) return { type: 'endTurn' };
-  // 1. Take a trick from someone, or finish one of my own (stacking it when the zone allows).
-  const per = (o) => o.gain / (o.kind === 'steal' ? o.cards.length : 1);
-  const now = lm.options.filter((o) => (o.kind === 'give' || o.kind === 'play' || o.kind === 'steal') && o.gain > 0)
-    .sort((a, b) => per(b) - per(a) || Number(!!b.stack) - Number(!!a.stack))[0];
-  if (now) return now.action;
-  // 2. A trick I can finish this turn in a face-up (multiplied) zone: start it now.
-  const left = lm.actionsLeft;
-  let start = null;
-  for (const z of zones.filter((x) => !x.secret)) {
-    const zid = `${pid}.${z.zone}`;
-    const loose = zoneTricks(project, st, zid).lone.map(def);
-    for (const t of bestTricks(C, [...loose, ...handDefs]).tricks) {
-      const pool = loose.slice();
-      const fromHand = t.defIds.filter((d) => { const i = pool.indexOf(d); if (i >= 0) { pool.splice(i, 1); return false; } return true; });
-      if (!fromHand.length || fromHand.length > left) continue;
-      const value = t.points * mult(z);
-      if (!start || value > start.value) start = { value, zid, card: hand[handDefs.indexOf(fromHand[0])] };
-    }
-  }
-  if (start && (!safe || start.value > 0)) return find((o) => o.kind === 'play' && o.card === start.card && o.to === start.zid && !o.stack);
-  // 3. Build a trick in the safe (face-down) zone.
-  if (safeZ) {
-    const r = bestTricks(C, [...safeLoose, ...handDefs]);
-    const pool = safeLoose.slice();
-    const candidates = r.tricks.map((t) => {
-      const p = pool.slice();
-      const fromHand = t.defIds.filter((d) => { const i = p.indexOf(d); if (i >= 0) { p.splice(i, 1); return false; } return true; });
-      return { t, fromHand };
-    }).filter((x) => x.fromHand.length).sort((a, b) => a.fromHand.length - b.fromHand.length || b.t.points - a.t.points);
-    if (candidates.length) {
-      const card = hand[handDefs.indexOf(candidates[0].fromHand[0])];
-      const a = find((o) => o.kind === 'play' && o.card === card && o.to === safeZ);
-      if (a) return a;
-    }
-  }
-  // 4. Swap for a face-up card that makes a new trick possible.
-  const base = plan(handDefs);
-  let swap = null;
-  for (const o of lm.options.filter((x) => x.kind === 'swap')) {
-    const i = hand.indexOf(o.card);
-    const gain = plan([...handDefs.filter((_, j) => j !== i), def(o.with)]) - base;
-    if (gain > 0 && (!swap || gain > swap.gain)) swap = { gain, a: o.action };
-  }
-  if (swap) return swap.a;
-  // 5. Draw while there is room in the hand.
   const limit = lm.handLimit || 99;
-  if (lm.canDraw && hand.length < limit) return { type: 'draw' };
-  // 6. A full hand: commit the most common card type towards a future trick.
-  if (safeZ && hand.length) {
-    const count = (d) => handDefs.filter((x) => x === d).length + safeLoose.filter((x) => x === d).length;
-    const card = hand.slice().sort((a, b) => count(def(b)) - count(def(a)))[0];
-    const a = find((o) => o.kind === 'play' && o.card === card && o.to === safeZ);
-    if (a && count(def(card)) > 1) return a;
+  const DRAW = 1.6;
+  const drawValue = (s, used) => {
+    const l = legalMoves(project, s, pid);
+    if (!l?.canDraw) return -Infinity;
+    return (s.zones[`${pid}.hand`].cards.length < limit ? DRAW : DRAW - 1.5) * used * 0.9;
+  };
+  // Distinct deterministic options (the same card type to the same place once).
+  const kinds = ['play', 'give', 'steal', 'swap', 'take'];
+  const options = (l, s) => {
+    const seen = new Set();
+    const d = (u) => s.cards[u]?.defId;
+    return l.options.filter((o) => kinds.includes(o.kind) && !o.stack).filter((o) => {
+      const a = o.action;
+      const key = `${a.type}:${d(a.card)}:${d(a.with)}:${(a.cards || []).map(d).sort()}:${a.to || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const base = value(st);
+  let best = { v: lm.canDraw ? base + drawValue(st, lm.actionsLeft) : base, a: lm.canDraw ? { type: 'draw' } : { type: 'endTurn' } };
+  for (const o of options(lm, st)) {
+    let s1;
+    try { s1 = botSim(project, st, pid, o.action); } catch { continue; }
+    let v = value(s1);
+    const used = o.kind === 'steal' ? o.cards.length : 1;
+    if (s1.status === 'playing' && activePlayer(s1).id === pid && !s1.hand.discarding && !s1.hand.retiring && lm.actionsLeft - used > 0) {
+      const l2 = legalMoves(project, s1, pid);
+      v = Math.max(v, v + drawValue(s1, 1));
+      for (const o2 of options(l2, s1)) {
+        if (o2.kind === 'steal' && o2.cards.length > l2.actionsLeft) continue;
+        try { v = Math.max(v, value(botSim(project, s1, pid, o2.action))); } catch { /* not legal after all */ }
+      }
+    }
+    if (v > best.v + 1e-9) best = { v, a: o.action };
   }
-  if (lm.canDraw) return { type: 'draw' };
-  return { type: 'endTurn' };
+  return best.a;
 }
 
 // ------------------------------------------------------------------ announcements

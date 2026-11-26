@@ -499,6 +499,9 @@ export async function renderPlay(root, ctx, args) {
           else commit({ type: 'move', card, to: zid }); // checked (and explained) like any move
           return;
         }
+        // Set collection: a face-up card dragged to your hand or a zone = take it.
+        const take = card && lm?.options?.find((x) => x.kind === 'take' && x.with === card && x.to === zid);
+        if (take) { commit(take.action); return; }
         if (card && isDrawTop(card, lm)) { if (zid !== st.cards[card].zone) commit({ type: 'draw' }); }
         else if (card && lm && zid === lm.target && st.cards[card]?.zone === `${lm.pid}.hand`) playCard(card);
         else if (card && st.cards[card]?.zone !== zid) commit({ type: 'move', card, to: zid });
@@ -725,7 +728,7 @@ export async function renderPlay(root, ctx, args) {
         view.mode === 'overhead' ? h('span', { class: 'muted small', title: 'Points in face-down zones, scored at the end' }, `Hidden: ${st.players.map((x) => `${x.name} ${setsBreakdown(project, st, x.id).hidden}`).join(', ')}`) : null) : null,
       lm ? h('div', { class: 'you-can' }, h('b', {}, `${p.name}: `), lm.summary,
         ai ? null : h('span', { class: 'muted small' }, sets
-          ? ' Select a card in the hand to see its options, or drag it: to a zone (a Day drop also stacks the set it completes), onto a face-up card (swap) or into another player\'s zone (to complete and take a set). Stacking is free.'
+          ? ` Select a card in the hand to see its options, or drag it: to a zone (a Day drop also stacks the set it completes)${setsCfg(project).swap !== false ? ', onto a face-up card (swap)' : ''} or into another player's zone (to complete and take a set). Stacking is free.`
           : ` Legal cards are outlined in green: double-click one, or select it and press Play (or Enter).${shedding && lm.canDraw ? ' Click the draw pile to draw.' : ''}`)) : null,
       tricks && st.lastTrick ? h('div', { class: 'last-trick small' },
         `Last trick: ${player(st, st.lastTrick.winner).name} won with ${cname(st.lastTrick.winningCard)} - `,
@@ -740,7 +743,9 @@ export async function renderPlay(root, ctx, args) {
         sets && !ai && lm?.options ? lm.options.filter((o) => o.kind === 'stack').map((o) => h('button', { class: 'btn', title: o.label, onclick: () => commit(o.action) }, `🔒 ${o.label.replace(/ so it cannot be taken$/, '')}`)) : null,
         sets && !ai && lm?.options ? lm.options.filter((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0).slice(0, 6).map((o) => h('button', { class: 'btn', title: o.label, onclick: () => commit(o.action) }, `🗡 ${o.kind === 'steal' ? o.label.replace(/^Put /, '') : `${cardDef(project, st, o.card)?.name}: ${o.label}`}`)) : null,
         sets && !ai && lm?.canDraw && !lm.discarding ? h('button', { class: 'btn', onclick: () => commit({ type: 'draw' }) }, 'Draw a card') : null,
-        sets && !ai && !lm?.discarding ? h('button', { class: `btn ${lm?.actionsLeft ? '' : 'primary'}`, onclick: () => commit({ type: 'endTurn' }) }, lm?.actionsLeft ? 'End turn early' : 'End turn') : null,
+        sets && !ai && lm?.retiring ? lm.options.filter((o) => o.kind === 'retire').map((o) => h('button', { class: 'btn', onclick: () => commit(o.action) }, `🌙 ${o.label}`)) : null,
+        sets && !ai && lm?.options?.some((o) => o.kind === 'take') && !lm.discarding ? h('span', { class: 'muted small' }, `Select a card in the ${st.zones[setsCfg(project).marketZone]?.name || 'face-up row'} to take it (or drag it to your hand or zone).`) : null,
+        sets && !ai && !lm?.discarding && !lm?.retiring ? h('button', { class: `btn ${lm?.actionsLeft ? '' : 'primary'}`, onclick: () => commit({ type: 'endTurn' }) }, lm?.actionsLeft ? 'End turn early' : 'End turn') : null,
         shedding && !ai && lm?.canDraw ? h('button', { class: `btn ${lm.legal.length ? '' : 'primary'}`, onclick: () => commit({ type: 'draw' }) }, lm.takeCount ? `Take ${lm.takeCount} cards` : 'Draw a card') : null,
         !ai && st.status === 'playing' ? announcementRules(project).map((r) => {
           const said = st.announce?.pid === p.id && st.announce.ids.includes(r.id);
@@ -788,13 +793,14 @@ export async function renderPlay(root, ctx, args) {
       ...st.zoneOrder.filter((zid) => !st.zones[zid].owner).map((zid) => [st.zones[zid].name, zid]),
     ].filter(([, zid]) => st.zones[zid] && zid !== c.zone);
     const lm = legalNow();
-    const playable = lm && c.zone === `${lm.pid}.hand` && visible;
-    const why = playable ? lm.cards[selected] : '';
+    const takes = lm?.options && !lm.discarding ? lm.options.filter((o) => o.kind === 'take' && o.with === selected) : [];
+    const playable = lm && ((c.zone === `${lm.pid}.hand` && visible) || takes.length);
+    const why = playable && !takes.length ? lm.cards[selected] : '';
     const strict = automation(project).enforce === 'strict';
-    const setOpts = playable && lm.options ? lm.options.filter((o) => o.card === selected) : null;
+    const setOpts = playable && lm.options ? (takes.length ? takes : lm.options.filter((o) => o.card === selected)) : null;
     const playBox = setOpts ? h('div', { class: 'play-box stack' },
       h('span', { class: 'field-label' }, `${lm.pid === activePlayer(st).id ? activePlayer(st).name : ''}: what to do with ${def.name}`),
-      setOpts.length ? setOpts.map((o) => h('button', { class: `btn small ${o.gain > 0 ? 'primary' : ''}`, onclick: () => commit(o.action) }, o.kind === 'swap' || o.kind === 'discard' ? o.label : o.kind === 'give' ? o.label : `${o.label.replace(/^Play/, `Play ${def.name}`)}`))
+      setOpts.length ? setOpts.map((o) => h('button', { class: `btn small ${o.gain > 0 ? 'primary' : ''}`, onclick: () => commit(o.action) }, o.kind === 'swap' || o.kind === 'discard' || o.kind === 'take' ? o.label : o.kind === 'give' ? o.label : `${o.label.replace(/^Play/, `Play ${def.name}`)}`))
         : h('p', { class: 'muted small' }, lm.cards[selected] || 'Nothing to do with this card now.')) : playable ? h('div', { class: 'play-box' },
       h('button', { class: 'btn primary', disabled: !!why && strict, onclick: () => playCard(selected) }, `Play ${def.name} ▶`),
       why ? h('p', { class: 'warn-box small' }, `Not allowed: ${why}`) : h('p', { class: 'muted small' }, 'This is a legal play.'),

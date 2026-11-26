@@ -233,7 +233,7 @@ function catchUp(from, quiet = false) {
     if (e.actor === HUMAN && /^You\b/.test(text)) text = text.replace(/\btheir\b/g, 'your');
     const kind = ['trick', 'hand', 'endGame', 'trump', 'score', 'steal'].includes(e.type) ? 'big' : ['penalty', 'announce', 'final'].includes(e.type) ? 'alert' : e.actor === HUMAN ? 'me' : 'play';
     pushFeed({ text, kind, actor: e.actor });
-    if (player(st, e.actor) && ['play', 'draw', 'pass', 'announce', 'move', 'endTurn', 'swap', 'steal', 'give', 'discard', 'stack'].includes(e.type)) bubbles[e.actor] = text.replace(new RegExp(`^${escapeRe(player(st, e.actor).name)}:?\\s*`), '');
+    if (player(st, e.actor) && ['play', 'draw', 'pass', 'announce', 'move', 'endTurn', 'swap', 'take', 'steal', 'give', 'discard', 'stack', 'retire'].includes(e.type)) bubbles[e.actor] = text.replace(new RegExp(`^${escapeRe(player(st, e.actor).name)}:?\\s*`), '');
     if (!quiet && e.type === 'stack' && e.actor === HUMAN) toast(`🔒 ${e.data.combo} stacked - nobody can take it now.`, 'info', 2500);
     else if (!quiet && e.type === 'steal' && e.actor === HUMAN) toast(`🎉 You completed ${player(st, e.data.victim).name}'s ${e.data.combo} and took it!${e.data.gain ? ` +${e.data.gain}` : ''}`, 'win', 3500);
     else if (!quiet && e.type === 'steal' && e.data?.victim === HUMAN) toast(`😱 ${player(st, e.actor).name} completed your ${e.data.combo} and took it!`, 'warn', 4000);
@@ -377,6 +377,19 @@ function playCard(u) {
   }
   act({ type: 'move', card: u, to: lm.target });
 }
+
+// Set collection: take a face-up Day card into your hand, or straight to a zone.
+function takeMenu(u, options) {
+  if (options.length === 1) return act(options[0].action);
+  const d = cardDef(game, st, u);
+  const where = (o) => (st.zones[o.to]?.defId === 'hand' ? 'Take it into your hand' : `Play it straight to your ${zoneDef(game, st.zones[o.to].defId)?.name}${isFaceDownZone(o.to) ? ' (face down)' : ''}`);
+  const dlg = modal(`Take the ${d?.name || 'card'}`, h('div', { class: 'stack' },
+    h('div', { class: 'pv-menu-card' }, cardFace(d, { size: 150 })),
+    d ? h('p', { class: 'small' }, cardText(d)) : null,
+    options.map((o) => h('button', { class: 'btn', onclick: () => { dlg.close(); act(o.action); } }, where(o)))),
+  [{ label: 'Cancel' }]);
+}
+const isFaceDownZone = (zid) => zoneDef(game, st.zones[zid]?.defId)?.faceUp === false;
 
 // Free-form games: the player chooses where the card goes.
 function freeFormMenu(u) {
@@ -634,11 +647,14 @@ function zoneView(zid) {
     body = h('div', { class: 'pv-pile', style: { '--depth': Math.min(6, Math.ceil(z.cards.length / 8)) } }, el);
   } else if (market) {
     const swaps = selOptions().filter((o) => o.kind === 'swap');
+    const takes = !sel && lm?.options && !lm.discarding ? lm.options.filter((o) => o.kind === 'take') : [];
     body = z.cards.length ? z.cards.map((u) => {
       const el = cardEl(u);
       const o = swaps.find((x) => x.with === u);
+      const t = takes.filter((x) => x.with === u);
       if (o) { el.classList.add('pv-drawable'); el.title = `Swap your ${cname(sel)} for ${cname(u)}`; el.addEventListener('click', () => act(o.action)); }
-      else if (myTurn()) el.title = 'To swap: tap a card in your hand, then tap this card';
+      else if (t.length) { el.classList.add('pv-drawable'); el.title = `Take ${cname(u)}`; el.addEventListener('click', () => takeMenu(u, t)); }
+      else if (myTurn() && swaps.length) el.title = 'To swap: tap a card in your hand, then tap this card';
       return el;
     }) : h('div', { class: 'pv-empty' }, 'empty');
   } else {
@@ -717,7 +733,9 @@ function myArea() {
   const setZones = sets ? setsCfg(game).zones.map((z) => `${HUMAN}.${z.zone}`) : [];
   const others = st.zoneOrder.filter((z) => st.zones[z].owner === HUMAN && z !== handZ && z !== wonZone && !setZones.includes(z));
   const actions = [];
-  if (myTurn() && sets && lm?.options) {
+  if (myTurn() && sets && lm?.options && lm.retiring) {
+    for (const o of lm.options.filter((x) => x.kind === 'retire')) actions.push(h('button', { class: 'btn', onclick: () => act(o.action) }, `🌙 ${o.label}`));
+  } else if (myTurn() && sets && lm?.options) {
     if (!lm.discarding) {
       for (const o of selOptions().filter((x) => x.kind !== 'swap')) {
         actions.push(h('button', { class: `btn ${o.gain > 0 ? 'primary' : ''}`, onclick: () => act(o.action) }, o.kind === 'give' ? `🗡 ${o.label}` : o.label));
@@ -740,13 +758,13 @@ function myArea() {
     actions.unshift(h('button', { class: 'btn catch-btn pv-catch', onclick: () => act({ type: 'catch' }) }, `Catch ${player(st, st.catchable.pid).name}! (didn't say "${st.catchable.label}")`));
   }
   const tip = st.status !== 'playing' ? '' : st.pending ? '' : myTurn()
-    ? (sets && lm?.options ? (lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones, a highlighted opponent, or a face-up card to swap.` : `${lm.summary} Tap a card in your hand to use it, or draw.${lm.canStack ? ' You have an unstacked set: tap 🔒 Stack to protect it (free).' : ''}${lm.options.some((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0) ? ' 🗡 You can take a set from another player - see the buttons on their panel.' : ''}`)
+    ? (sets && lm?.options ? (lm.retiring ? lm.summary : lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: choose where it goes - one of your zones${lm.options.some((o) => o.kind === 'give' || o.kind === 'steal') ? ', a highlighted opponent' : ''}${lm.options.some((o) => o.kind === 'swap') ? ', or a face-up card to swap' : ''}.` : `${lm.summary} Tap a card in your hand to use it${lm.options.some((o) => o.kind === 'take') ? `, or tap one of the ${st.zones[setsCfg(game).marketZone]?.name || 'face-up cards'} to take it` : lm.canDraw ? ', or draw' : ''}.${lm.canStack ? ' You have an unstacked set: tap 🔒 Stack to protect it (free).' : ''}${lm.options.some((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0) ? ' 🗡 You can take a set from another player - see the buttons on their panel.' : ''}`)
       : lm ? `${lm.summary}${lm.legal.length ? ' Tap a highlighted card to play it.' : ''}` : 'Tap a card to play it, or draw from a pile; then end your turn.')
     : 'Waiting for the other players…';
   const chips = [];
   if (st.hand && st.dealer === p.seat && !isSets(game)) chips.push(h('span', { class: 'pv-chip' }, 'Dealer'));
   if (isTricks(game) && st.hand) chips.push(h('span', { class: 'pv-chip' }, `Tricks ${st.hand.tricksWon[HUMAN] || 0}`));
-  if (sets && myTurn() && lm?.options) chips.push(h('span', { class: 'pv-chip gold' }, lm.discarding ? 'Discard' : `Actions left: ${lm.actionsLeft} of ${lm.actionsPerTurn}`));
+  if (sets && myTurn() && lm?.options) chips.push(h('span', { class: 'pv-chip gold' }, lm.retiring ? 'Move a set' : lm.discarding ? 'Discard' : `Actions left: ${lm.actionsLeft} of ${lm.actionsPerTurn}`));
   if (sets && !st.revealed) {
     const b = setsBreakdown(game, st, HUMAN);
     if (b.hidden) chips.push(h('span', { class: 'pv-chip', title: 'Points in your face-down zones: only you know about them until the end' }, `+${b.hidden} hidden`));
@@ -831,14 +849,26 @@ function toggleCheat() {
 // Points for a trick written with named cards: a number or a range (e.g. a
 // slot with alternatives). Tricks with "any" cards score the cards' values.
 function trickPoints(C, cb) {
+  // A fixed number of points (e.g. a bonus) needs no cards worked out.
+  if (/^\s*-?\d+(\.\d+)?\s*$/.test(cb.points || '')) return [Number(cb.points), Number(cb.points)];
   if (cb.slots.some((s) => !s.ids)) return null;
+  const inDeck = Object.fromEntries(game.cards.map((c) => [c.id, Number(c.count) || 0]));
+  // Every way to fill the slots, as card types (combinations, so few enough to try).
+  const choose = (ids, k, distinct, from = 0) => {
+    if (!k) return [[]];
+    const out = [];
+    for (let i = from; i < ids.length && out.length < 400; i++) for (const rest of choose(ids, k - 1, distinct, distinct ? i + 1 : i)) out.push([ids[i], ...rest]);
+    return out;
+  };
   let fills = [[]];
   for (const s of cb.slots) {
     const next = [];
-    for (const pre of fills) for (const id of s.ids) next.push([...pre, ...Array(s.count).fill(id)]);
-    fills = next.slice(0, 300);
+    for (const pre of fills) for (const pick of choose([...s.ids], s.count, s.distinct)) next.push([...pre, ...pick]);
+    fills = next.slice(0, 400);
   }
-  const pts = fills.map((ids) => C.pointsOf(cb, ids)).filter((n) => n > 0);
+  // Only sets the deck can actually make (no more copies of a card than it has).
+  const possible = (ids) => ids.every((id) => ids.filter((x) => x === id).length <= (inDeck[id] ?? 99));
+  const pts = fills.filter(possible).map((ids) => C.pointsOf(cb, ids)).filter((n) => n > 0);
   return pts.length ? [Math.min(...pts), Math.max(...pts)] : null;
 }
 
@@ -851,7 +881,7 @@ function cheatSheet() {
     const ids = s.ids ? [...s.ids] : null;
     if (!ids) return h('span', { class: 'pv-cs-slot' }, Array.from({ length: Math.min(s.count, 3) }, () => h('span', { class: 'pv-chipcard any' }, '?')), h('span', { class: 'pv-cs-x' }, s.distinct ? `${s.count} different` : s.count === 1 ? 'any card' : `any ${s.count}`));
     const one = ids.length === 1 ? chip(ids[0]) : h('span', { class: 'pv-cs-alt' }, ids.map((id, i) => [i ? h('span', { class: 'pv-cs-or' }, 'or') : null, chip(id)]));
-    return h('span', { class: 'pv-cs-slot' }, one, s.count > 1 ? h('span', { class: 'pv-cs-x' }, `×${s.count}`) : null);
+    return h('span', { class: 'pv-cs-slot' }, one, s.count > 1 ? h('span', { class: 'pv-cs-x' }, s.distinct ? `${s.count} different` : `×${s.count}`) : null);
   };
   const zones = (S.zones || []).filter((z) => zoneDef(game, z.zone));
   const range = (r, m = 1) => (r ? (r[0] === r[1] ? `${r[0] * m}` : `${r[0] * m}-${r[1] * m}`) : null);
@@ -861,18 +891,19 @@ function cheatSheet() {
   return h('aside', { class: 'pv-cheat', role: 'dialog', 'aria-label': 'Sets and scores' },
     h('div', { class: 'pv-cheat-head' }, h('b', {}, '📜 Sets & scores'), h('button', { class: 'icon-btn', onclick: toggleCheat, title: 'Close' }, '✕')),
     h('table', { class: 'pv-cheat-table' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Set'), h('th', {}, 'Cards'), zones.map((z) => h('th', { class: 'num' }, `${zoneDef(game, z.zone).name} ×${Number(z.multiplier) || 1}`)))),
+      h('thead', {}, h('tr', {}, h('th', {}, 'Set'), h('th', {}, 'Cards'), zones.map((z) => h('th', { class: 'num' }, `${S.cardsScore ? 'Bonus: ' : ''}${zoneDef(game, z.zone).name} ×${Number(z.multiplier) || 1}`)))),
       h('tbody', {}, C.combos.map((cb) => {
         const r = trickPoints(C, cb);
         return h('tr', {},
           h('td', { class: 'pv-cs-name' }, cb.label),
           h('td', {}, h('span', { class: 'pv-cs-cards' }, cb.slots.map((s, i) => [i ? h('span', { class: 'pv-cs-plus' }, '+') : null, slotView(s)]))),
-          zones.map((z) => h('td', { class: 'num' }, r ? range(r, Number(z.multiplier) || 1) : `sum ×${Number(z.multiplier) || 1}`)));
+          zones.map((z) => h('td', { class: 'num' }, r ? `${S.cardsScore ? '+' : ''}${range(r, Number(z.multiplier) || 1)}` : `sum ×${Number(z.multiplier) || 1}`)));
       }))),
-    h('div', { class: 'pv-cs-values' }, h('span', { class: 'muted small' }, 'Card values:'),
+    h('div', { class: 'pv-cs-values' }, h('span', { class: 'muted small' }, S.cardsScore ? 'Card values (every card scores):' : 'Card values:'),
       game.cards.map((c) => h('span', { class: 'pv-cs-value' }, chip(c.id), h('span', {}, isWildValue(c.stats?.[S.valueStat || 'value']) ? 'wild' : String(c.stats?.[S.valueStat || 'value'] ?? 0))))),
     h('ul', { class: 'pv-cs-notes' },
-      h('li', {}, 'Only cards in a set score; each card counts in one set.'),
+      h('li', {}, S.cardsScore ? 'Every card scores its value, in a set or not; a set adds its bonus on top. Each card counts in one set.' : 'Only cards in a set score; each card counts in one set.'),
+      (S.takeTo || []).length ? h('li', {}, `Pick up only from the ${st?.zones[S.marketZone]?.name || 'face-up cards'}: into your hand${S.takeTo.filter((z) => z !== 'hand').length ? `, or straight to your ${S.takeTo.filter((z) => z !== 'hand').map((z) => zoneDef(game, z)?.name).join(' or ')} as the same action` : ''}.`) : null,
       wild.length ? h('li', {}, `${wild.map((c) => c.name).join(', ')}: wild - worth as much as the best card it is with.`) : null,
       stackable.length && S.arrange === 'auto' ? h('li', {}, `Your ${stackable.join(' and ')} group themselves into sets (fewest lone cards). Sets are safe; a lone card can be used by others.`) : null,
       stackable.length && S.arrange !== 'auto' ? h('li', {}, `Stack a finished set in your ${stackable.join(' or ')} (free) so nobody can take it.`) : null,

@@ -364,7 +364,7 @@ test('announcements: say it in time, get caught, automatic penalty, tracked in s
 });
 
 // ------------------------------------------------------------------ set collection (Weirdwolves)
-import { werewolfProject } from '../../static/js/model.js';
+import { applyVariants, werewolfProject } from '../../static/js/model.js';
 import { setsBotTurn, setsBreakdown, zoneTricks } from '../../static/js/engine.js';
 import { bestTricks, compileSets, parsePattern } from '../../static/js/sets.js';
 
@@ -374,33 +374,50 @@ test('set collection: patterns and the best split into tricks', () => {
   assert.deepEqual(C.errors, []);
   const score = (names) => bestTricks(C, names.map((n) => p.cards.find((c) => c.name === n).id)).total;
   assert.equal(score(Array(5).fill('Villager')), 5, 'Mob');
-  assert.equal(score(Array(4).fill('Villager')), 0, 'four villagers are not a trick');
-  assert.equal(score(['Seer', 'Witch', 'Villager', 'Werewolf']), 9, 'Vision: 3 different cards');
-  assert.equal(score(['Seer', 'Seer', 'Werewolf', 'Cupid']), 7, 'Vision with a second Seer');
-  assert.equal(score(['Seer', 'Sister', 'Hunter', 'Cupid']), 7, 'Sisters and Hunters are different roles for a Seer');
+  assert.equal(score(Array(4).fill('Villager')), 0, 'four villagers are not a set');
+  assert.equal(score(['Seer', 'Witch', 'Werewolf', 'Vampire']), 11, 'Vision: 3 different Night characters');
+  assert.equal(score(['Seer', 'Seer', 'Werewolf', 'Witch']), 7, 'Vision with a second Seer');
+  assert.equal(score(['Seer', 'Sister', 'Hunter', 'Cupid']), 4, 'Day characters do not count for a Seer: only Lovers (3 + 2 - 1)');
+  assert.equal(score(['Seer', 'Witch', 'Villager', 'Werewolf']), 6, 'a Villager is not a Night character: Potions instead');
   assert.equal(score(['Sister', 'Sister']), 6, 'Sisters');
-  assert.equal(score(['Hunter', 'Werewolf']), 5, 'Hunt');
+  assert.equal(score(['Hunter', 'Werewolf']), 4, 'Hunt');
   assert.equal(score(['Defender', 'Sister']), 6, 'a Defender can guard a Sister');
   assert.equal(score(['Defender', 'Hunter']), 4, 'and a Hunter');
-  assert.equal(score(['Seer', 'Villager', 'Villager', 'Werewolf']), 4, 'not 3 different: only a Hunt');
-  assert.equal(score(['Sister']), 0, 'one Sister alone is not a trick');
-  assert.equal(score(['Werewolf', 'Villager']), 4, 'Dinner');
-  assert.equal(score(['Witch', 'Villager', 'Werewolf']), 7, 'Potion');
-  assert.equal(score(['Alpha Wolf', 'Werewolf', 'Werewolf']), 10, 'Pack');
-  assert.equal(score(['Defender', 'Villager']), 2, 'Guard = 2 x the guarded card');
-  assert.equal(score(['Defender', 'Seer']), 4, 'Seer is worth 2');
+  assert.equal(score(['Sister']), 0, 'one Sister alone is not a set');
+  assert.equal(score(['Werewolf', 'Villager']), 3, 'Dinner');
+  assert.equal(score(['Witch', 'Villager', 'Werewolf']), 6, 'Potions');
+  assert.equal(score(['Alpha Wolf', 'Werewolf', 'Werewolf', 'Werewolf']), 10, 'Pack: 3 Werewolves');
+  assert.equal(score(['Alpha Wolf', 'Werewolf', 'Werewolf']), 0, 'two Werewolves are not a Pack');
+  assert.equal(score(['Defender', 'Villager']), 2, 'Defend = 2 x the guarded card');
   assert.equal(score(['Defender', 'Witch']), 6);
   assert.equal(score(['Vampire', 'Villager', 'Villager', 'Villager']), 8, 'Feast');
-  assert.equal(score(['Cupid', 'Vampire', 'Vampire']), 10, 'Lovers score the two cards');
-  assert.equal(score(['Cupid', 'Defender', 'Witch']), 6, 'a wild Defender is worth the best card it is with');
-  assert.equal(score(['Seer', 'Defender', 'Witch', 'Villager']), 9, 'Defender = Witch (3) in a Vision');
-  // Each card counts once, and the best arrangement wins: Feast + Hunt beats Mob.
-  assert.equal(score(['Vampire', 'Werewolf', ...Array(5).fill('Villager')]), 12);
+  assert.equal(score(['Cupid', 'Vampire', 'Vampire']), 9, 'Lovers: the two cards, less 1 for Cupid');
+  assert.equal(score(['Cannibal', ...Array(5).fill('Villager')]), 11, 'Banquet beats a Mob');
+  assert.equal(score(['Cannibal', 'Sister', 'Sister', 'Hunter', 'Villager', 'Villager']), 16, 'Banquet: any 5 Day characters');
+  assert.equal(score(['Cannibal', 'Werewolf', 'Villager', 'Villager', 'Villager', 'Villager']), 3, 'a Werewolf is not a Day character: only a Dinner');
+  // Each card counts once, and the best arrangement wins: Feast + Dinner beats Mob.
+  assert.equal(score(['Vampire', 'Werewolf', ...Array(5).fill('Villager')]), 11);
   assert.match(parsePattern('dragon + villager', p.cards).error, /No card is called "dragon"/);
+  // The other scoring: every card scores, sets add a bonus (Day x3).
+  const q = normalizeProject(applyVariants(werewolfProject(), { scoring: 1 }));
+  const st = createGame(q, { players: players4.slice(0, 3), seed: 2 });
+  const put = (name, zone) => {
+    const u = Object.values(st.cards).find((c) => q.cards.find((d) => d.id === c.defId).name === name && c.zone === 'nightpile').uid;
+    const from = st.zones.nightpile.cards;
+    from.splice(from.indexOf(u), 1);
+    st.zones[zone].cards.push(u);
+    st.cards[u].zone = zone;
+  };
+  for (const n of ['Werewolf', 'Villager', 'Vampire']) put(n, 'p1.night');
+  assert.equal(zoneTricks(q, st, 'p1.night').total, 2 + 0 + 1 + 4, 'Dinner (2 + 0 + bonus 1) and a lone Vampire (4)');
+  for (let i = 0; i < 5; i++) put('Villager', 'p2.day');
+  put('Cannibal', 'p2.day');
+  assert.equal(setsBreakdown(q, st, 'p2').zones[0].points, (4 + 10) * 3, 'Banquet in the Day: (4 + bonus 10) x 3');
 });
 
 test('set collection: actions, swaps, steals, hand limit and the end of the game', () => {
-  const p = normalizeProject(werewolfProject());
+  const p = normalizeProject(applyVariants(werewolfProject(), { pickup: 1 })); // draw and swap
+
   p.automation.sets.arrange = 'manual';
   const st = createGame(p, { players: players4.slice(0, 3), seed: 5 });
   const [a, b] = ['p1', 'p2'];
@@ -422,7 +439,7 @@ test('set collection: actions, swaps, steals, hand limit and the end of the game
   apply(p, st, { type: 'move', card: vil, to: `${b}.day`, actor: a });
   assert.equal(st.cards[wolf].zone, `${a}.night`);
   assert.equal(st.cards[vil].zone, `${a}.night`);
-  assert.equal(setsBreakdown(p, st, a).hidden, 4);
+  assert.equal(setsBreakdown(p, st, a).hidden, 3);
   assert.equal(st.players[0].counters.score, 0, 'night points stay hidden until the end');
   // A card that completes nothing cannot be put in someone else's zone.
   const lone = card('Seer', `${a}.hand`);
@@ -438,7 +455,7 @@ test('set collection: actions, swaps, steals, hand limit and the end of the game
   const v2 = card('Villager', `${b}.hand`);
   apply(p, st, { type: 'move', card: w2, to: 'day', actor: b });
   apply(p, st, { type: 'move', card: v2, to: 'day', actor: b });
-  assert.equal(st.players[1].counters.score, 8);
+  assert.equal(st.players[1].counters.score, 6);
   const v3 = card('Villager', 'p3.hand');
   // An unstacked trick can still be used: p3 completes a Hunt with B's Werewolf.
   assert.ok(legalMoves(p, st, 'p3').options.some((o) => o.kind === 'give' && o.card === v3 && o.victim === b), 'unstacked cards can be taken');
@@ -473,7 +490,7 @@ test('set collection: whole bot games keep every card and end with equal turns',
         turns[pid]++;
       }
       assert.equal(st.status, 'ended');
-      assert.equal(Object.values(st.zones).reduce((s, z) => s + z.cards.length, 0), 77);
+      assert.equal(Object.values(st.zones).reduce((s, z) => s + z.cards.length, 0), 82);
       assert.equal(st.zones.nightpile.cards.length, 0);
       assert.equal(new Set(Object.values(turns)).size, 1, `equal turns: ${JSON.stringify(turns)}`);
       for (const x of st.players) assert.equal(x.counters.score, setsBreakdown(p, st, x.id).total);
@@ -499,10 +516,10 @@ test('set collection: stacking protects a trick and fixes how it scores', () => 
   const v = put('Villager', 'p1.hand');
   apply(p, st, { type: 'move', card: w, to: 'day', actor: 'p1' });
   const lm = legalMoves(p, st, 'p1');
-  assert.ok(lm.options.some((o) => o.kind === 'play' && o.card === v && o.stack && o.gain === 8));
+  assert.ok(lm.options.some((o) => o.kind === 'play' && o.card === v && o.stack && o.gain === 6));
   apply(p, st, { type: 'move', card: v, to: 'day', stack: true, actor: 'p1' });
   assert.deepEqual(st.stacks['p1.day'], [[v, w]]);
-  assert.equal(st.players[0].counters.score, 8);
+  assert.equal(st.players[0].counters.score, 6);
   // A Villager from p2 no longer completes anything with p1's cards.
   const v2 = put('Villager', 'p2.hand');
   assert.ok(!legalMoves(p, st, 'p2').options.some((o) => o.kind === 'give' && o.card === v2 && o.victim === 'p1'));
@@ -537,13 +554,13 @@ test('set collection: Day tricks group themselves; steals can use several cards'
     st.cards[u].zone = zone;
     return u;
   };
-  // A Hunt, then a Seer and a Witch: they regroup into a Vision (no lone cards).
+  // A Dinner, then a Seer, a Witch and a Vampire: they regroup into a Vision, leaving only the Villager alone.
   put('Werewolf', 'p2.day'); put('Villager', 'p2.day');
   assert.deepEqual(zoneTricks(p, st, 'p2.day').tricks.map((t) => t.label), ['Dinner']);
-  put('Seer', 'p2.day'); put('Witch', 'p2.day');
+  put('Seer', 'p2.day'); put('Witch', 'p2.day'); put('Vampire', 'p2.day');
   let t = zoneTricks(p, st, 'p2.day');
   assert.deepEqual(t.tricks.map((x) => x.label), ['Vision']);
-  assert.equal(t.lone.length, 0);
+  assert.deepEqual(t.lone.map((u) => st.cards[u].defId), ['villager']);
   // Fewest lone cards, and the least valuable left alone: Werewolf + 2 Villagers -> Hunt, lone Villager.
   put('Werewolf', 'p3.day'); put('Villager', 'p3.day'); put('Villager', 'p3.day');
   t = zoneTricks(p, st, 'p3.day');
@@ -672,6 +689,7 @@ test('set collection: cards that always score, and Day cards swapped into the Da
   const p = normalizeProject(werewolfProject());
   const S = p.automation.sets;
   S.cardsScore = true;
+  S.swap = true;
   S.swapTo = ['day'];
   S.takeTo = ['night'];
   for (const c of S.combos) c.points = { hunt: '1', guard: '2' }[c.id] || '3';
@@ -684,11 +702,11 @@ test('set collection: cards that always score, and Day cards swapped into the Da
     st.cards[u].zone = zone;
     return u;
   };
-  // A lone Werewolf scores its 3; with a Villager it is a Dinner: 3 + 1 + bonus 1.
+  // A lone Werewolf scores its 2; with a Villager it is a Dinner: 2 + 1 + bonus 1.
   put('Werewolf', 'p2.day');
-  assert.equal(zoneTricks(p, st, 'p2.day').total, 3);
+  assert.equal(zoneTricks(p, st, 'p2.day').total, 2);
   put('Villager', 'p2.day');
-  assert.equal(zoneTricks(p, st, 'p2.day').total, 5);
+  assert.equal(zoneTricks(p, st, 'p2.day').total, 4);
   // A Defender is worth the best card in its set, and nothing alone.
   put('Defender', 'p3.night');
   assert.equal(zoneTricks(p, st, 'p3.night').total, 0);

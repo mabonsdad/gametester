@@ -106,7 +106,11 @@ export function finishTurn(project, st, p, myTurn = () => st.status === 'playing
   if (isSets(project)) {
     for (let k = 0; k < 12 && myTurn(); k++) {
       const lm = legalMoves(project, st, p.id);
-      if (lm.discarding) {
+      if (lm.retiring) {
+        const a = setsBotTurn(project, st, p.id)[0];
+        act({ type: 'note', actor: 'system', text: `${p.name} has too many sets; the harness moves one for them.` });
+        act(a || lm.options.find((o) => o.kind === 'retire').action);
+      } else if (lm.discarding) {
         const a = setsBotTurn(project, st, p.id)[0];
         act({ type: 'note', actor: 'system', text: `${p.name} must discard; the harness discards for them.` });
         act(a || { type: 'move', card: st.zones[`${p.id}.hand`].cards[0], to: lm.options[0]?.action.to });
