@@ -635,3 +635,35 @@ test('set collection rule options: sets that lock, a per-turn zone limit, sets t
   assert.equal(st.cards[w].zone, 'p1.night');
   assert.ok(st.log.some((e) => e.type === 'nightfall' && e.data?.vote));
 });
+
+test('set collection: a set limit moves a set of the player\'s choice to the Night at the end of their turn', () => {
+  const p = normalizeProject(werewolfProject());
+  p.automation.sets.setLimits = { day: 3 };
+  const st = createGame(p, { players: players4.slice(0, 3), seed: 8 });
+  const put = (name, zone) => {
+    const u = Object.values(st.cards).find((c) => p.cards.find((d) => d.id === c.defId).name === name && c.zone === 'nightpile').uid;
+    const from = st.zones.nightpile.cards;
+    from.splice(from.indexOf(u), 1);
+    st.zones[zone].cards.push(u);
+    st.cards[u].zone = zone;
+    return u;
+  };
+  while (activePlayer(st).id !== 'p1') apply(p, st, { type: 'endTurn', actor: activePlayer(st).id });
+  put('Sister', 'p1.day'); put('Sister', 'p1.day');
+  put('Hunter', 'p1.day'); put('Werewolf', 'p1.day');
+  put('Werewolf', 'p1.day'); put('Villager', 'p1.day');
+  const w = put('Werewolf', 'p1.hand');
+  const v = put('Villager', 'p1.hand');
+  apply(p, st, { type: 'move', card: w, to: 'day', actor: 'p1' });
+  apply(p, st, { type: 'move', card: v, to: 'day', actor: 'p1' });
+  assert.equal(zoneTricks(p, st, 'p1.day').tricks.length, 4);
+  assert.equal(activePlayer(st).id, 'p1', 'the turn waits for a set to move');
+  const lm = legalMoves(p, st, 'p1');
+  assert.deepEqual(lm.options.map((o) => o.kind), ['retire', 'retire', 'retire', 'retire']);
+  assert.match(checkAction(p, st, { type: 'endTurn', actor: 'p1' }), /Move one of your sets/);
+  const sisters = lm.options.find((o) => o.combo === 'Sisters');
+  apply(p, st, { ...sisters.action, actor: 'p1' });
+  assert.equal(zoneTricks(p, st, 'p1.day').tricks.length, 3);
+  assert.equal(zoneTricks(p, st, 'p1.night').tricks.find((t) => t.label === 'Sisters').points, 6);
+  assert.equal(activePlayer(st).id, 'p2');
+});

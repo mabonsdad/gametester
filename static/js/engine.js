@@ -297,7 +297,7 @@ export function apply(project, st, action) {
   const a = action || {};
   const actor = a.actor || activePlayer(st).id;
   const who = player(st, actor)?.name || actor;
-  if (isSets(project) && st.hand && st.status === 'playing' && player(st, actor) && ['move', 'draw', 'swap', 'endTurn', 'stack', 'steal'].includes(a.type)) {
+  if (isSets(project) && st.hand && st.status === 'playing' && player(st, actor) && ['move', 'draw', 'swap', 'endTurn', 'stack', 'steal', 'retire'].includes(a.type)) {
     setsApply(project, st, a, actor);
     return st;
   }
@@ -1137,6 +1137,10 @@ const SETS_DEFAULTS = {
   // with the most points in the give zone (Day) moves their most valuable set
   // there to their capture zone (Night), where it scores less and is out of play.
   vote: 'off',
+  // Most sets a player may keep in a zone type at the end of their turn, e.g.
+  // { day: 3 }: with more, they move whole sets of their choice to their
+  // capture zone (Night) until they are within the limit.
+  setLimits: {},
 };
 export const setsCfg = (project) => ({ ...SETS_DEFAULTS, ...(automation(project).sets || {}) });
 const setsC = (project) => compileSets(project, setsCfg(project));
@@ -1161,6 +1165,15 @@ const zoneLimit = (project, st, zid) => {
   return n > 0 ? n : 0;
 };
 const zonePlays = (st, zid) => st.hand.zonePlays?.[zid] || 0;
+// The first of pid's zones that holds more sets than its limit, or null.
+function overSetLimit(project, st, pid) {
+  const S = setsCfg(project);
+  for (const [defId, max] of Object.entries(S.setLimits || {})) {
+    const zid = `${pid}.${defId}`;
+    if (Number(max) > 0 && st.zones[zid] && st.zones[`${pid}.${S.captureZone}`] && zoneTricks(project, st, zid).tricks.length > Number(max)) return zid;
+  }
+  return null;
+}
 
 // The zone's stacks that are still valid (all cards there, still a trick).
 function zoneStacks(project, st, zid) {
@@ -1365,6 +1378,7 @@ function startSets(project, st) {
   const H = st.hand;
   H.actionsUsed = 0;
   H.zonePlays = {};
+  H.retiring = null;
   H.discarding = false;
   H.lastSeat = null;
   st.turn.active = nextSeat(project, st, st.dealer);
@@ -1389,10 +1403,27 @@ function setsApply(project, st, a, actor) {
       log(st, actor, 'turn', `${who} has ${handCount()} cards and must discard down to ${limit}.`);
       return;
     }
+    if (H.retiring) throw new Error(`Move one of your sets to your ${zoneDef(project, S.captureZone)?.name || 'Night'} first.`);
     log(st, actor, 'endTurn', `${who} ended their turn${H.actionsUsed < S.actions ? ` after ${H.actionsUsed} action${H.actionsUsed === 1 ? '' : 's'}` : ''}.`);
-    setsAdvance(project, st);
+    setsTurnEnd(project, st, actor);
     return;
   }
+  if (a.type === 'retire') {
+    const why = retireProblem(project, st, actor, a.cards);
+    if (why) throw new Error(why);
+    const zid = H.retiring;
+    const dest = `${actor}.${S.captureZone}`;
+    const t = zoneTricks(project, st, zid).tricks.find((x) => sameCards(x.cards, a.cards));
+    for (const u of a.cards) placeCard(project, st, u, dest);
+    if (st.stacks?.[zid]) st.stacks[zid] = st.stacks[zid].filter((g) => !g.some((u) => a.cards.includes(u)));
+    log(st, actor, 'retire', `${who} has more than ${setsCfg(project).setLimits[st.zones[zid].defId]} sets in their ${zoneDef(project, st.zones[zid].defId)?.name}, so their ${t.label} (${a.cards.map((u) => cardName(project, st, u)).join(', ')}) moves to their ${zoneDef(project, S.captureZone)?.name}.`,
+      { data: { cards: a.cards.slice(), from: zid, to: dest, combo: t.label } });
+    H.retiring = null;
+    setsRescore(project, st);
+    setsTurnEnd(project, st, actor);
+    return;
+  }
+  if (H.retiring) throw new Error(`Move one of your sets to your ${zoneDef(project, S.captureZone)?.name || 'Night'} first.`);
   if (a.type === 'stack') {
     // Free: does not use an action, allowed at any point of your own turn.
     const why = stackProblem(project, st, actor, a.cards);
@@ -1465,7 +1496,7 @@ function setsApply(project, st, a, actor) {
     log(st, actor, 'discard', `${who} discarded ${name}.`, { data: { card: a.card, to } });
     if (handCount() <= limit) {
       H.discarding = false;
-      setsAdvance(project, st);
+      setsTurnEnd(project, st, actor);
     }
     return;
   }
@@ -1543,7 +1574,31 @@ function setsUsed(project, st, actor) {
     log(st, actor, 'turn', `${player(st, actor).name} has ${n} cards and must discard ${n - limit}.`);
     return;
   }
+  setsTurnEnd(project, st, actor);
+}
+
+// The end of a turn, after any discards: move sets over a zone's set limit, then pass.
+function setsTurnEnd(project, st, actor) {
+  const H = st.hand;
+  const zid = overSetLimit(project, st, actor);
+  if (zid) {
+    H.retiring = zid;
+    const S = setsCfg(project);
+    log(st, actor, 'turn', `${player(st, actor).name} has more than ${S.setLimits[st.zones[zid].defId]} sets in their ${zoneDef(project, st.zones[zid].defId)?.name} and must move one to their ${zoneDef(project, S.captureZone)?.name}.`);
+    return;
+  }
+  H.retiring = null;
   setsAdvance(project, st);
+}
+
+const sameCards = (a, b) => a.length === b.length && a.every((u) => b.includes(u));
+
+function retireProblem(project, st, pid, cards) {
+  const H = st.hand;
+  if (!H.retiring) return 'You only move a set when you have too many at the end of your turn.';
+  if (st.zones[H.retiring].owner !== pid) return 'Move one of your own sets.';
+  if (!Array.isArray(cards) || !zoneTricks(project, st, H.retiring).tricks.some((t) => sameCards(t.cards, cards))) return `Choose one whole set from your ${zoneDef(project, st.zones[H.retiring].defId)?.name}.`;
+  return null;
 }
 
 function noteEmptyPile(project, st) {
@@ -1655,6 +1710,16 @@ function setsLegal(project, st, pid, out) {
     }
   }
   out.canStack = out.options.some((o) => o.kind === 'stack');
+  if (H.retiring && !H.discarding) {
+    const zname = zoneDef(project, st.zones[H.retiring].defId)?.name;
+    const dest = zoneDef(project, S.captureZone)?.name;
+    out.retiring = H.retiring;
+    for (const t of zoneTricks(project, st, H.retiring).tricks) {
+      out.options.push({ kind: 'retire', cards: t.cards, combo: t.label, points: t.points, label: `Move your ${t.label} (${t.cards.map(nm).join(', ')}) to your ${dest}`, action: { type: 'retire', cards: t.cards } });
+    }
+    out.summary = `You may keep only ${S.setLimits[st.zones[H.retiring].defId]} sets in your ${zname}: move one to your ${dest}.`;
+    return out;
+  }
   if (H.discarding) {
     for (const u of hand) {
       out.cards[u] = '';
@@ -1731,9 +1796,11 @@ function setsLegal(project, st, pid, out) {
 function checkSets(project, st, action, actor) {
   const S = setsCfg(project);
   const active = activePlayer(st);
-  if (['move', 'draw', 'swap', 'endTurn', 'stack', 'steal'].includes(action.type) && actor !== active.id) return `It is ${active.name}'s turn, not ${player(st, actor).name}'s.`;
+  if (['move', 'draw', 'swap', 'endTurn', 'stack', 'steal', 'retire'].includes(action.type) && actor !== active.id) return `It is ${active.name}'s turn, not ${player(st, actor).name}'s.`;
   if (action.type === 'stack') return stackProblem(project, st, actor, action.cards);
   if (action.type === 'steal') return stealPlan(project, st, actor, action.cards, resolveZone(st, action.to, actor)).error || null;
+  if (action.type === 'retire') return retireProblem(project, st, actor, action.cards);
+  if (st.hand?.retiring && action.type !== 'counter') return `Move one of your sets to your ${zoneDef(project, setsCfg(project).captureZone)?.name || 'Night'} first.`;
   const lm = legalMoves(project, st, actor);
   switch (action.type) {
     case 'draw':
@@ -1796,6 +1863,10 @@ function setsBotChoice(project, st, pid) {
   // Stacking is free: protect every finished face-up trick straight away.
   const stack = lm.options.find((o) => o.kind === 'stack');
   if (stack) return stack.action;
+  if (lm.retiring) {
+    // Too many sets: move the least valuable one.
+    return lm.options.filter((o) => o.kind === 'retire').sort((x, y) => x.points - y.points)[0]?.action || null;
+  }
   if (lm.discarding) {
     let pick = null; let bestLeft = -1;
     for (const [i, u] of hand.entries()) {
