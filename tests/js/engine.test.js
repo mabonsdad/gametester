@@ -376,7 +376,7 @@ test('set collection: patterns and the best split into tricks', () => {
   assert.equal(score(Array(5).fill('Villager')), 5, 'Mob');
   assert.equal(score(Array(4).fill('Villager')), 0, 'four villagers are not a set');
   assert.equal(score(['Seer', 'Witch', 'Werewolf', 'Vampire']), 11, 'Vision: 3 different Night characters');
-  assert.equal(score(['Seer', 'Seer', 'Werewolf', 'Witch']), 7, 'Vision with a second Seer');
+  assert.equal(score(['Seer', 'Seer', 'Werewolf', 'Witch']), 0, 'a second Seer does not count towards a Vision');
   assert.equal(score(['Seer', 'Sister', 'Hunter', 'Cupid']), 5, 'Day characters do not count for a Seer: only Lovers (3 + 2)');
   assert.equal(score(['Seer', 'Witch', 'Villager', 'Werewolf']), 6, 'a Villager is not a Night character: Potions instead');
   assert.equal(score(['Sister', 'Sister']), 6, 'Sisters');
@@ -391,7 +391,8 @@ test('set collection: patterns and the best split into tricks', () => {
   assert.equal(score(['Defender', 'Villager']), 2, 'Defend = 2 x the guarded card');
   assert.equal(score(['Defender', 'Witch']), 6);
   assert.equal(score(['Vampire', 'Villager', 'Villager', 'Villager']), 8, 'Feast');
-  assert.equal(score(['Cupid', 'Vampire', 'Vampire']), 10, 'Lovers: the two cards (Cupid is worth 0)');
+  assert.equal(score(['Cupid', 'Vampire', 'Witch']), 8, 'Lovers: the two cards (Cupid is worth 0)');
+  assert.equal(score(['Cupid', 'Vampire', 'Vampire']), 0, 'Lovers need two different cards');
   assert.equal(score(['Cannibal', ...Array(5).fill('Villager')]), 13, 'Banquet beats a Mob');
   assert.equal(score(['Cannibal', 'Sister', 'Sister', 'Hunter', 'Villager', 'Villager']), 6, 'a Banquet needs 5 Villagers: only the Sisters');
   assert.equal(score(['Cannibal', 'Werewolf', 'Villager', 'Villager', 'Villager', 'Villager']), 3, 'a Werewolf is not a Day character: only a Dinner');

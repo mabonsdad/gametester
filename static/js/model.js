@@ -483,13 +483,13 @@ export const WEREWOLF_SCORING = {
     dayMultiplier: 2,
     value: { villager: 1, seer: 1, werewolf: 2, witch: 3, cupid: 0, 'alpha-wolf': 6, defender: 'same', vampire: 5, sister: 3, hunter: 2, cannibal: 8 },
     combos: {
-      mob: ['5 villagers', ''], vision: ['seer + 3 tag:night distinct', ''], hunt: ['werewolf + villager', ''], potion: ['witch + villager + werewolf', ''],
-      lovers: ['cupid + 2 any', ''], pack: ['alpha wolf + 3 werewolves', ''], guard: ['defender + villager/seer/witch/sister/hunter', ''],
+      mob: ['5 villagers', ''], vision: ['seer + 3 witch/werewolf/vampire/alpha wolf distinct', ''], hunt: ['werewolf + villager', ''], potion: ['witch + villager + werewolf', ''],
+      lovers: ['cupid + 2 any distinct', ''], pack: ['alpha wolf + 3 werewolves', ''], guard: ['defender + villager/seer/witch/sister/hunter', ''],
       feast: ['vampire + 3 villagers', ''], sisters: ['2 sisters', ''], bullet: ['hunter + werewolf', ''], banquet: ['cannibal + 5 villagers', ''],
     },
     text: {
-      villager: 'Mob: 5 Villagers.', seer: 'Vision: a Seer + 3 different Night characters (moon cards).', werewolf: 'Dinner: a Werewolf + a Villager.',
-      witch: 'Potions: Witch + Villager (saved) + Werewolf (poisoned).', cupid: 'Lovers: Cupid + any 2 cards.', 'alpha-wolf': 'Pack: Alpha Wolf + 3 Werewolves.',
+      villager: 'Mob: 5 Villagers.', seer: 'Vision: a Seer + 3 different Night characters (moon cards; not another Seer).', werewolf: 'Dinner: a Werewolf + a Villager.',
+      witch: 'Potions: Witch + Villager (saved) + Werewolf (poisoned).', cupid: 'Lovers: Cupid + 2 different cards.', 'alpha-wolf': 'Pack: Alpha Wolf + 3 Werewolves.',
       defender: 'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter.', vampire: 'Feast: a Vampire + 3 Villagers.', sister: 'Sisters: a pair of Sisters.',
       hunter: 'Hunt: a Hunter + a Werewolf.', cannibal: 'Banquet: a Cannibal + 5 Villagers.',
     },
@@ -497,10 +497,10 @@ export const WEREWOLF_SCORING = {
       "Only cards in a set score. A set is worth the sum of its cards' values - doubled in your Day sets, single in your Night sets. Each card counts in one set only. Night sets are arranged for the most points; Day sets for the fewest lone cards.\n" +
       'Night characters have a moon on the card: Seer, Witch, Werewolf, Vampire and Alpha Wolf. All the others are Day characters.\n' +
       'Mob: 5 Villagers (5).\n' +
-      'Vision: a Seer + 3 different Night characters, e.g. Seer, Witch, Werewolf, Vampire (11) or Seer, Seer, Werewolf, Witch (7).\n' +
+      'Vision: a Seer + 3 different Night characters other than a Seer (Witch, Werewolf, Vampire, Alpha Wolf), e.g. Seer, Witch, Werewolf, Vampire (11).\n' +
       'Dinner: a Werewolf + a Villager (3).\n' +
       'Potions: a Witch + a Villager + a Werewolf (6).\n' +
-      "Lovers: Cupid + any 2 cards (the two cards' values).\n" +
+      "Lovers: Cupid + 2 different cards (the two cards' values).\n" +
       'Pack: the Alpha Wolf + 3 Werewolves (12).\n' +
       'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter (2 to 6). The Defender is wild: it is worth as much as the card it is with.\n' +
       'Feast: a Vampire + 3 Villagers (8).\n' +
@@ -514,13 +514,13 @@ export const WEREWOLF_SCORING = {
     dayMultiplier: 3,
     value: { villager: 0, seer: 1, werewolf: 2, witch: 2, cupid: 0, 'alpha-wolf': 3, defender: 'same', vampire: 4, sister: 1, hunter: 2, cannibal: 4 },
     combos: {
-      mob: ['5 villagers', '8'], vision: ['seer + 3 tag:night distinct', '3'], hunt: ['werewolf + villager', '1'], potion: ['witch + villager + werewolf', '2'],
-      lovers: ['cupid + 2 any', '2'], pack: ['alpha wolf + 2 werewolves', '3'], guard: ['defender + villager/seer/witch/sister/hunter', '2'],
+      mob: ['5 villagers', '8'], vision: ['seer + 3 witch/werewolf/vampire/alpha wolf distinct', '3'], hunt: ['werewolf + villager', '1'], potion: ['witch + villager + werewolf', '2'],
+      lovers: ['cupid + 2 any distinct', '2'], pack: ['alpha wolf + 2 werewolves', '3'], guard: ['defender + villager/seer/witch/sister/hunter', '2'],
       feast: ['vampire + 3 villagers', '4'], sisters: ['2 sisters', '2'], bullet: ['hunter + werewolf', '2'], banquet: ['cannibal + 5 villagers', '10'],
     },
     text: {
-      villager: 'Mob: 5 Villagers (+8).', seer: 'Vision: a Seer + 3 different Night characters (+3).', werewolf: 'Dinner: a Werewolf + a Villager (+1).',
-      witch: 'Potions: Witch + Villager + Werewolf (+2).', cupid: 'Lovers: Cupid + any 2 cards (+2).', 'alpha-wolf': 'Pack: Alpha Wolf + 2 Werewolves (+3).',
+      villager: 'Mob: 5 Villagers (+8).', seer: 'Vision: a Seer + 3 different Night characters, not another Seer (+3).', werewolf: 'Dinner: a Werewolf + a Villager (+1).',
+      witch: 'Potions: Witch + Villager + Werewolf (+2).', cupid: 'Lovers: Cupid + 2 different cards (+2).', 'alpha-wolf': 'Pack: Alpha Wolf + 2 Werewolves (+3).',
       defender: 'Defend: a Defender + a Villager, Seer, Witch, Sister or Hunter (+2).', vampire: 'Feast: a Vampire + 3 Villagers (+4).', sister: 'Sisters: a pair of Sisters (+2).',
       hunter: 'Hunt: a Hunter + a Werewolf (+2).', cannibal: 'Banquet: a Cannibal + 5 Villagers (+10).',
     },
@@ -529,7 +529,7 @@ export const WEREWOLF_SCORING = {
       'A lone Day card still scores, but another player can use it to complete a set and take it.\n' +
       'Night characters have a moon on the card: Seer, Witch, Werewolf, Vampire and Alpha Wolf. All the others are Day characters.\n' +
       'Card values: Villager 0, Cupid 0, Seer 1, Sister 1, Witch 2, Werewolf 2, Hunter 2, Alpha Wolf 3, Vampire 4, Cannibal 4; the Defender is worth the best card in its set (nothing alone).\n' +
-      'Set bonuses: Mob (5 Villagers) +8; Vision (a Seer + 3 different Night characters) +3; Dinner (Werewolf + Villager) +1; Potions (Witch + Villager + Werewolf) +2; Lovers (Cupid + any 2 cards) +2; Pack (Alpha Wolf + 2 Werewolves) +3; Defend (Defender + Villager, Seer, Witch, Sister or Hunter) +2; Feast (Vampire + 3 Villagers) +4; Sisters (2 Sisters) +2; Hunt (Hunter + Werewolf) +2; Banquet (Cannibal + 5 Villagers) +10.',
+      'Set bonuses: Mob (5 Villagers) +8; Vision (a Seer + 3 different Night characters, not another Seer) +3; Dinner (Werewolf + Villager) +1; Potions (Witch + Villager + Werewolf) +2; Lovers (Cupid + 2 different cards) +2; Pack (Alpha Wolf + 2 Werewolves) +3; Defend (Defender + Villager, Seer, Witch, Sister or Hunter) +2; Feast (Vampire + 3 Villagers) +4; Sisters (2 Sisters) +2; Hunt (Hunter + Werewolf) +2; Banquet (Cannibal + 5 Villagers) +10.',
   },
 };
 

@@ -1513,7 +1513,8 @@ function setsApply(project, st, a, actor) {
     if (top) placeCard(project, st, top, S.marketZone, { faceUp: true });
     const zname = zoneDef(project, st.zones[dest].defId)?.name;
     const faceUp = isPublicZone(project, st, dest);
-    log(st, actor, 'take', `${who} took ${name} from the ${market.name} straight into their ${zname}${faceUp ? '' : ' (face down)'}${top ? `; ${cardName(project, st, top)} replaces it` : ''}.`, { data: { with: a.with, to: dest, refill: top || null } });
+    const into = st.zones[dest].defId === 'hand' ? 'into their hand' : `straight into their ${zname}${faceUp ? '' : ' (face down)'}`;
+    log(st, actor, 'take', `${who} took ${name} from the ${market.name} ${into}${top ? `; ${cardName(project, st, top)} replaces it` : ''}.`, { data: { with: a.with, to: dest, refill: top || null } });
     setsUsed(project, st, actor);
     return;
   }

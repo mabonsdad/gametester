@@ -264,3 +264,79 @@ html.pv-html { background: #143f30; }
 @media (max-width: 600px) { .pv-cardinfo-card .card { --cw: 190px; } }
 
 .pv-mini.art { background-size: 100% 100%; background-color: transparent; border: none; }
+
+/* ---------- drag and drop (hand cards and the face-up cards) */
+.pv-draggable { touch-action: none; cursor: grab; }
+body.pv-dragging, body.pv-dragging * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
+.pv-ghost { position: fixed; left: -999px; top: -999px; z-index: 100; pointer-events: none; margin: 0 !important; transform: rotate(-4deg) scale(1.06); box-shadow: 0 18px 36px rgba(0,0,0,.55); opacity: .96; }
+.pv-drag-source { opacity: .3; }
+.pv-drop { outline: 3px dashed #f2c14e !important; outline-offset: 3px; border-radius: 12px; }
+.pv-drop-over { outline-style: solid !important; background: rgba(242,193,78,.18) !important; box-shadow: 0 0 0 6px rgba(242,193,78,.25), 0 0 24px rgba(242,193,78,.35); }
+.pv-drag-tip { position: fixed; z-index: 101; pointer-events: none; max-width: min(320px, calc(100vw - 16px)); background: #fffdf8; color: #1f2328; border-radius: 10px; padding: 7px 11px; font-size: 14px; line-height: 1.3; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.pv-hand.pv-drop { background: rgba(242,193,78,.08); }
+
+/* ---------- the table in set-collection games: pile count in the middle, the discard pile set apart */
+.pv-pile-count { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.9), 0 0 12px rgba(0,0,0,.8); line-height: 1.05; text-align: center; }
+.pv-pile-count b { font-size: calc(var(--cw) * .34); }
+.pv-pile-count small { font-size: calc(var(--cw) * .12); text-transform: uppercase; letter-spacing: .06em; }
+.pv-role-discard { --cw: 58px; align-self: center; margin-left: 10px; padding-left: 18px; border-left: 1px dashed rgba(255,255,255,.22); opacity: .75; }
+.pv-role-discard .card { filter: grayscale(1) brightness(.55) contrast(.9); }
+.pv-role-discard .pv-zone-label { font-size: 11px; opacity: .8; }
+.pv-role-discard .pv-zone-cards { min-height: calc(var(--cw) * 1.4); }
+
+/* ---------- wide screens: Day and Night either side of (and a little above) your hand */
+@media (min-width: 900px) {
+  .pv-me.pv-me-sets { display: grid; grid-template-columns: minmax(210px, 1fr) auto minmax(210px, 1fr); grid-template-areas: "head head head" "left info right" "left hand right"; column-gap: 14px; row-gap: 6px; align-items: start; }
+  .pv-me-sets .pv-me-head { grid-area: head; }
+  .pv-me-sets .pv-my-sets { display: contents; }
+  .pv-me-sets .pv-my-zone:nth-child(1) { grid-area: left; }
+  .pv-me-sets .pv-my-zone:nth-child(2) { grid-area: right; }
+  .pv-me-sets .pv-my-zone { min-height: calc(var(--cw) * 1.4 + 60px); }
+  .pv-me-sets .pv-me-info { grid-area: info; display: flex; flex-direction: column; gap: 6px; align-items: center; text-align: center; max-width: 640px; justify-self: center; }
+  .pv-me-sets .pv-hand { grid-area: hand; align-self: end; justify-self: center; max-width: 100%; }
+  .pv-me-sets .pv-actions { justify-content: center; }
+}
+.pv-me-info { display: flex; flex-direction: column; gap: 6px; }
+
+/* ---------- compact layout so the whole table fits on the screen */
+.pv-me-sets .pv-tip { font-size: 13.5px; color: #d9e6df; }
+@media (min-width: 900px) {
+  .pv-opps { padding-top: 22px; gap: 10px; }
+  .pv-opp { padding: 6px 10px 6px; gap: 2px; }
+  .pv-opp .pv-avatar { width: 34px; height: 34px; font-size: 20px; }
+  .pv-opp-hand { height: 30px; }
+  .pv-table { padding: 6px 12px 8px; gap: 6px; min-height: 0; }
+  .pv-main { gap: 8px; padding: 8px 12px; }
+  .pv-me { padding: 6px 12px 8px; gap: 6px; }
+  .pv-me-sets .pv-my-zone { min-height: calc(var(--cw) * 1.4 + 34px); }
+}
+@media (max-width: 899px) {
+  /* The draw pile and the discard pile share a row; the face-up cards get their own. */
+  .pv-zones { gap: 10px 16px; }
+  .pv-role-draw { order: 0; }
+  .pv-role-discard { order: 1; margin-left: 0; }
+  .pv-role-market { order: 2; flex-basis: 100%; }
+  .pv-role-discard .pv-zone-label { display: block; }
+  /* Your Day and Night sets side by side, with short labels. */
+  .pv-me-sets .pv-my-sets { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .pv-me-sets .pv-my-zone { min-height: calc(var(--cw) * 1.4 + 28px); padding: 4px 6px; }
+  .pv-zone-desc { display: none; }
+  .pv-me-sets .pv-my-zone .pv-zone-label { font-size: 12px; }
+}
+@media (min-width: 900px) {
+  /* Side zones: smaller cards so several sets fit side by side. */
+  .pv-me-sets .pv-my-zone { --cw: 52px; }
+  .pv-me-sets .pv-zone-desc { display: none; }
+  .pv-me-sets .pv-me-info { max-width: 440px; }
+  .pv-me-sets .pv-sets { gap: 6px; }
+}
+@media (min-width: 1300px) { .pv-me-sets .pv-my-zone { --cw: 60px; } }
+/* Short wide screens (laptops, iPads): smaller table cards so everything fits. */
+@media (min-width: 900px) and (max-height: 860px) {
+  .pv-body { --cw: 72px; }
+  .pv-hand { --cw: 100px; }
+  .pv-opps { padding-top: 16px; }
+  .pv-opp-zone { padding: 2px 6px; }
+}
+/* Speech bubbles near the screen edge must not make the page scroll sideways. */
+.pv-main { overflow-x: clip; }
