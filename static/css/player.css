@@ -340,3 +340,38 @@ body.pv-dragging, body.pv-dragging * { cursor: grabbing !important; user-select:
 }
 /* Speech bubbles near the screen edge must not make the page scroll sideways. */
 .pv-main { overflow-x: clip; }
+
+/* ---------- opponents: avatar in the corner, name and points beside it, the hand beside that */
+.pv-opp-head { display: flex; align-items: center; gap: 8px; width: 100%; }
+.pv-opp-head .pv-avatar { flex: none; width: 36px; height: 36px; font-size: 21px; }
+.pv-opp-id { flex: 1; min-width: 0; text-align: left; line-height: 1.15; }
+.pv-opp-id .pv-opp-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-opp-head .pv-opp-hand { flex: none; width: 64px; height: 34px; }
+.pv-opp-head .pv-mini { left: calc(50% - 11px + (var(--i) - (var(--n) - 1) / 2) * 6px); }
+.pv-opp-head .pv-opp-hand .pv-count { right: -8px; bottom: -2px; }
+.pv-opp { align-items: stretch; }
+.pv-opp .pv-opp-sets { max-width: none; }
+
+/* ---------- a tapped Day card: arrows to where it can go */
+.pv-arrows { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 40; overflow: visible; }
+.pv-arrow { fill: none; stroke: #f2c14e; stroke-width: 4; stroke-linecap: round; stroke-dasharray: 10 8; filter: drop-shadow(0 2px 3px rgba(0,0,0,.6)); animation: pv-march .8s linear infinite; }
+@keyframes pv-march { to { stroke-dashoffset: -18; } }
+.pv-arrow-label { fill: #fff3d6; font-size: 15px; font-weight: 700; paint-order: stroke; stroke: rgba(0,0,0,.75); stroke-width: 4px; }
+.pv-role-market .card.picked { transform: translateY(-8px); box-shadow: 0 0 0 3px #f2c14e, 0 12px 24px rgba(0,0,0,.5); }
+
+/* ---------- "stack them yourself": choose your lone Day cards */
+.pv-stackable { cursor: pointer; }
+.pv-stack-pick { outline: 3px solid #f2c14e; outline-offset: 2px; transform: translateY(-4px); }
+.pv-stack-chooser { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; background: rgba(242,193,78,.12); border: 1px solid rgba(242,193,78,.5); border-radius: 8px; padding: 4px 8px; }
+.pv-stack-help { flex-basis: 100%; font-size: 12px; color: #f2e3b3; }
+
+/* ---------- the hand: overlap more as it grows, so it never spills into the side zones */
+@media (min-width: 900px) {
+  .pv-me-sets { grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr) minmax(200px, 1fr) !important; }
+  .pv-me-sets .pv-my-zone { min-width: 0; }
+  .pv-hand:not(.many) .pv-card + .pv-card { margin-left: calc(var(--cw) * clamp(-0.55, 0.35 - var(--n, 4) * 0.1, -0.06)); }
+}
+@media (min-width: 900px) { .pv-opp { min-width: 200px; } }
+@media (max-width: 899px) {
+  .pv-hand:not(.many) .pv-card + .pv-card { margin-left: calc(var(--cw) * clamp(-0.62, 0.1 - var(--n, 4) * 0.1, -0.32)); }
+}
