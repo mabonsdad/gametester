@@ -754,3 +754,45 @@ test('set collection: picking only from the face-up cards (no blind draws, no sw
   assert.equal(st.zones.nightpile.cards.length, pile - 2);
   assert.notEqual(activePlayer(st).id, pid, 'one action each');
 });
+
+test('set collection: stack them yourself - rearrange your sets, or play a card straight into one', () => {
+  const p = normalizeProject(applyVariants(werewolfProject(), { arrange: 1 }));
+  const st = createGame(p, { players: players4.slice(0, 3), seed: 12 });
+  const put = (name, zone) => {
+    const u = Object.values(st.cards).find((c) => p.cards.find((d) => d.id === c.defId).name === name && c.zone === 'nightpile').uid;
+    const from = st.zones.nightpile.cards;
+    from.splice(from.indexOf(u), 1);
+    st.zones[zone].cards.push(u);
+    st.cards[u].zone = zone;
+    return u;
+  };
+  while (activePlayer(st).id !== 'p1') apply(p, st, { type: 'endTurn', actor: activePlayer(st).id });
+  const w = put('Werewolf', 'p1.day');
+  const v = put('Villager', 'p1.day');
+  const hu = put('Hunter', 'p1.day');
+  apply(p, st, { type: 'arrange', zone: 'day', groups: [[w, v]], actor: 'p1' });
+  assert.deepEqual(zoneTricks(p, st, 'p1.day').stacks.map((t) => t.label), ['Dinner']);
+  // The Hunter takes the Villager's place: a Hunt, and the Villager is left alone. It is free.
+  const used = st.hand.actionsUsed;
+  apply(p, st, { type: 'arrange', zone: 'p1.day', groups: [[w, hu]], actor: 'p1' });
+  assert.equal(st.hand.actionsUsed, used);
+  const t = zoneTricks(p, st, 'p1.day');
+  assert.deepEqual(t.stacks.map((x) => x.label), ['Hunt']);
+  assert.deepEqual(t.lone, [v]);
+  assert.match(checkAction(p, st, { type: 'arrange', zone: 'p1.day', groups: [[w, v, hu]], actor: 'p1' }), /is not a set/);
+  assert.match(checkAction(p, st, { type: 'arrange', zone: 'p1.day', groups: [[w, hu], [hu, v]], actor: 'p1' }), /only one set/);
+  assert.match(checkAction(p, st, { type: 'arrange', zone: 'p2.day', groups: [], actor: 'p1' }), /your own/);
+  // A card from the hand played straight into a set: a second Werewolf with the lone Villager.
+  const w2 = put('Werewolf', 'p1.hand');
+  apply(p, st, { type: 'move', card: w2, to: 'day', groups: [[w, hu], [w2, v]], actor: 'p1' });
+  assert.deepEqual(zoneTricks(p, st, 'p1.day').stacks.map((x) => x.label).sort(), ['Dinner', 'Hunt']);
+  // An impossible arrangement puts the card back in the hand.
+  const s1 = put('Sister', 'p1.hand');
+  while (activePlayer(st).id !== 'p1') apply(p, st, { type: 'endTurn', actor: activePlayer(st).id });
+  assert.throws(() => apply(p, st, { type: 'move', card: s1, to: 'day', groups: [[s1, v]], actor: 'p1' }), /is not a set/);
+  assert.equal(st.cards[s1].zone, 'p1.hand');
+  // Only when stacking by hand.
+  const q = normalizeProject(werewolfProject());
+  const st2 = createGame(q, { players: players4.slice(0, 3), seed: 1 });
+  assert.match(checkAction(q, st2, { type: 'arrange', zone: 'day', groups: [], actor: activePlayer(st2).id }), /not arranged by hand/);
+});

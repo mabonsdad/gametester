@@ -375,3 +375,9 @@ body.pv-dragging, body.pv-dragging * { cursor: grabbing !important; user-select:
 @media (max-width: 899px) {
   .pv-hand:not(.many) .pv-card + .pv-card { margin-left: calc(var(--cw) * clamp(-0.62, 0.1 - var(--n, 4) * 0.1, -0.32)); }
 }
+
+/* ---------- stack them yourself: a set spreads out so you can drop on the card to swap out */
+.pv-tg.pv-spread .pv-tg-cards > .card + .card { margin-left: 6px !important; }
+.pv-tg.pv-spread { background: rgba(242,193,78,.16); }
+.pv-tg .pv-tg-cards > .card { transition: margin-left .15s ease; }
+.pv-tg.pv-spread .card.pv-drop { outline-offset: 1px; }

@@ -593,11 +593,22 @@ function trickGroups(zid, { compact = false } = {}) {
   const card = (u) => {
     if (compact) return chipCard(u);
     const d = cardDef(game, st, u);
+    if (choosing && d && !r.lone.includes(u)) {
+      // A card in one of your stacked sets: drag it to move it.
+      const el = infoOnClick(cardFace(d), d);
+      el.dataset.card = u;
+      el.classList.add('pv-draggable');
+      el.title = `${cardText(d)}\n${dragHint(u, 'day')}`;
+      el.addEventListener('pointerdown', (e) => startPress(e, u, 'day', el));
+      return el;
+    }
     if (choosing && r.lone.includes(u) && d) {
       const el = cardFace(d);
-      el.classList.add('pv-stackable');
+      el.dataset.card = u;
+      el.classList.add('pv-stackable', 'pv-draggable');
+      el.addEventListener('pointerdown', (e) => startPress(e, u, 'day', el));
       if (stackSel.includes(u)) el.classList.add('pv-stack-pick');
-      el.title = `${cardText(d)}\n${stackSel.includes(u) ? 'Tap to leave it out of the stack' : 'Tap to add it to a stack'}`;
+      el.title = `${cardText(d)}\n${stackSel.includes(u) ? 'Tap to leave it out of the stack' : 'Tap to add it to a stack, or drag it onto a set'}`;
       el.addEventListener('click', (e) => { e.stopPropagation(); stackSel = stackSel.includes(u) ? stackSel.filter((x) => x !== u) : [...stackSel, u]; sel = null; selMarket = null; render(); });
       return el;
     }
@@ -613,7 +624,8 @@ function trickGroups(zid, { compact = false } = {}) {
     r.tricks.map((t) => {
       const o = stackOpts.find((x) => x.cards.length === t.cards.length && x.cards.every((u) => t.cards.includes(u)));
       const open = !t.stacked && canStackHere;
-      return h('div', { class: `pv-tg ${t.stacked ? 'stacked' : ''} ${open ? 'open' : ''}`, title: t.stacked ? 'Stacked: safe, and it always scores as this set' : open ? 'Not stacked: other players can use these cards' : '' },
+      const gi = t.stacked ? r.stacks.indexOf(t) : -1;
+      return h('div', { class: `pv-tg ${t.stacked ? 'stacked' : ''} ${open ? 'open' : ''}`, dataset: gi >= 0 && own ? { group: gi } : undefined, title: t.stacked ? 'Stacked: safe, and it always scores as this set' : open ? 'Not stacked: other players can use these cards' : '' },
         h('div', { class: 'pv-tg-cards' }, t.cards.map(card)),
         h('div', { class: 'pv-tg-label' }, `${t.stacked ? '🔒 ' : ''}${t.label} ${pts(t)}${open && !o ? ' · not stacked' : ''}`),
         o ? h('button', { class: 'btn small pv-stack-btn', onclick: (e) => { e.stopPropagation(); act(o.action); }, title: o.label }, '🔒 Stack') : null);
@@ -622,7 +634,7 @@ function trickGroups(zid, { compact = false } = {}) {
       h('div', { class: 'pv-tg-label' }, cfg?.secret ? 'not in a set yet' : own ? 'lone - others can use these' : 'lone')) : null,
     !z.cards.length ? h('div', { class: 'pv-empty' }, compact ? '-' : 'empty') : null,
     choosing && stackSel.length ? stackChooser() : null,
-    choosing && !stackSel.length && r.lone.length > 1 ? h('div', { class: 'pv-stack-help' }, 'Tap your lone cards to choose a set to stack.') : null);
+    choosing && !stackSel.length && r.lone.length + r.stacks.length > 1 ? h('div', { class: 'pv-stack-help' }, 'Tap lone cards to choose a set to stack, or drag a card onto a set to swap it in.') : null);
 }
 
 // The cards chosen to stack: which set they make, and the button that stacks them.
@@ -1022,6 +1034,96 @@ function dragOptions(u, from) {
   return [...byPlace.entries()].map(([place, option]) => ({ place, option }));
 }
 
+// "Stack them yourself": dropping card x (from the hand, or already in your Day
+// sets) onto one of your stacked sets swaps it in for the card it can replace -
+// or, when it could replace several, the set spreads out and you drop it on
+// the one you want. Onto a lone card: the two make a set. Out of a set onto
+// empty space: it is left alone. -> [{ el, option: { label, action }, split }]
+function setTargets(x, from) {
+  const S = setsCfg(game);
+  const zid = `${HUMAN}.${S.giveZone}`;
+  if (!myTurn() || S.arrange !== 'manual' || !st.zones[zid] || !canStack(game, st, zid)) return [];
+  const lm = legalMoves(game, st, HUMAN);
+  if (!lm?.options || lm.retiring || lm.discarding) return [];
+  const fromHand = from === 'hand';
+  if (fromHand && !lm.options.some((o) => o.kind === 'play' && o.card === x && o.to === zid)) return [];
+  if (!fromHand && from !== 'day') return [];
+  const zoneEl = app.querySelector(`.pv-my-zone[data-zone="${zid}"]`);
+  if (!zoneEl) return [];
+  const C = compileSets(game, S);
+  const r = zoneTricks(game, st, zid);
+  const stacks = r.stacks.map((t) => t.cards.slice());
+  const defOf = (u) => st.cards[u].defId;
+  const valid = (cards) => matchGroup(C, cards.map(defOf));
+  const src = stacks.findIndex((g) => g.includes(x));
+  const action = (groups) => {
+    const g = groups.filter(Boolean);
+    return fromHand ? { type: 'move', card: x, to: zid, groups: g } : { type: 'arrange', zone: zid, groups: g };
+  };
+  // Take x out of its own set; the card it replaces goes there instead if that still makes a set.
+  const fromSource = (groups, y) => {
+    if (src < 0) return '';
+    const rest = stacks[src].filter((u) => u !== x);
+    const swapped = y ? valid([...rest, y]) : null;
+    if (swapped) { groups[src] = [...rest, y]; return ` (${cname(y)} goes into its ${swapped.label})`; }
+    const kept = rest.length ? valid(rest) : null;
+    groups[src] = kept ? rest : null;
+    return kept ? '' : ` (its ${r.stacks[src].label} breaks up)`;
+  };
+  const verb = fromHand ? 'Play' : 'Move';
+  const out = [];
+  stacks.forEach((G, gi) => {
+    if (gi === src) return;
+    const groupEl = zoneEl.querySelector(`[data-group="${gi}"]`);
+    if (!groupEl) return;
+    const opts = [];
+    const seen = new Set();
+    const add = valid([...G, x]);
+    if (add) opts.push({ y: null, newG: [...G, x], m: add });
+    for (const y of G) {
+      if (seen.has(defOf(y))) continue; // replacing either of two Villagers is the same
+      const newG = [...G.filter((u) => u !== y), x];
+      const m = valid(newG);
+      if (m) { seen.add(defOf(y)); opts.push({ y, newG, m }); }
+    }
+    const option = (o) => {
+      const groups = stacks.map((g) => g.slice());
+      groups[gi] = o.newG;
+      const note = fromSource(groups, o.y);
+      return {
+        label: o.y ? `${verb} ${cname(x)} in for the ${cname(o.y)}: ${o.m.label}${note || `; the ${cname(o.y)} is left alone`}` : `${verb} ${cname(x)} into the set: ${o.m.label}${note}`,
+        action: action(groups),
+      };
+    };
+    if (opts.length === 1) out.push({ el: groupEl, option: option(opts[0]) });
+    else if (opts.length > 1) {
+      out.push({ el: groupEl, split: true, option: { label: `${cname(x)} could replace ${opts.filter((o) => o.y).map((o) => `the ${cname(o.y)}`).join(' or ')}: drop it on the one to swap out`, action: null } });
+      for (const o of opts.filter((q) => q.y)) {
+        const el = groupEl.querySelector(`[data-card="${o.y}"]`);
+        if (el) out.push({ el, option: option(o) });
+      }
+    }
+  });
+  // Onto a lone card: the two make a set.
+  for (const y of r.lone) {
+    if (y === x) continue;
+    const m = valid([x, y]);
+    const el = zoneEl.querySelector(`[data-card="${y}"]`);
+    if (!m || !el) continue;
+    const groups = stacks.map((g) => g.slice());
+    const note = fromSource(groups, null);
+    groups.push([x, y]);
+    out.push({ el, option: { label: `${verb} ${cname(x)} with the ${cname(y)}: ${m.label}${note}`, action: action(groups) } });
+  }
+  // Out of its set, onto empty space in the zone: left alone.
+  if (!fromHand && src >= 0) {
+    const groups = stacks.map((g) => g.slice());
+    const note = fromSource(groups, null);
+    out.push({ el: zoneEl, option: { label: `Take ${cname(x)} out of the ${r.stacks[src].label}: it is left alone${note}`, action: action(groups) } });
+  }
+  return out;
+}
+
 function placeName(o) {
   if (o.kind === 'swap') return `a ${st.zones[setsCfg(game).marketZone]?.name || 'face-up'} card to swap`;
   const z = st.zones[o.to];
@@ -1031,6 +1133,7 @@ function placeName(o) {
 }
 
 function dragHint(u, from) {
+  if (from === 'day') return 'Drag onto one of your sets to swap it in, onto a lone card to pair them, or out of its set onto empty space';
   const opts = dragOptions(u, from).map((x) => x.option);
   if (!opts.length) return '';
   const mine = [...new Set(opts.filter((o) => o.kind !== 'give').map(placeName))];
@@ -1043,8 +1146,8 @@ function startPress(e, u, from, el) {
   if (drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
   const targets = dragOptions(u, from).map(({ place, option }) => {
     const [kind, id] = place.split(/:(.*)/);
-    return { el: app.querySelector(kind === 'card' ? `[data-card="${id}"]` : `[data-zone="${id}"]`), option };
-  }).filter((t) => t.el);
+    return { el: app.querySelector(kind === 'card' ? `.pv-role-market [data-card="${id}"]` : `[data-zone="${id}"]`), option };
+  }).concat(setTargets(u, from)).filter((t) => t.el);
   if (!targets.length) return;
   drag = { u, from, el, targets, sx: e.clientX, sy: e.clientY, moved: false, over: null, ghost: null, tip: null };
   // A Day card shows where it can go as soon as it is pressed.
@@ -1082,7 +1185,13 @@ function dragMove(e) {
   drag.ghost.style.left = `${e.clientX - r.width / 2}px`;
   drag.ghost.style.top = `${e.clientY - r.height * 0.6}px`;
   const hit = document.elementFromPoint(e.clientX, e.clientY);
-  const over = (hit && drag.targets.find((t) => t.el === hit || t.el.contains(hit))) || null;
+  // The innermost target under the pointer (a card in a set before the set, the set before the zone).
+  const over = (hit && drag.targets.filter((t) => t.el === hit || t.el.contains(hit))
+    .sort((a, b) => (b.el.contains(a.el) ? -1 : a.el.contains(b.el) ? 1 : 0))[0]) || null;
+  // A set the card could go into in several ways spreads out while the card is over it.
+  const group = hit?.closest?.('.pv-tg[data-group]');
+  const splitting = group && drag.targets.some((t) => t.split && t.el === group) ? group : null;
+  if (splitting !== drag.spread) { drag.spread?.classList.remove('pv-spread'); splitting?.classList.add('pv-spread'); drag.spread = splitting; }
   if (over !== drag.over) {
     drag.over?.el.classList.remove('pv-drop-over');
     over?.el.classList.add('pv-drop-over');
@@ -1096,7 +1205,7 @@ function dragEnd() {
   stopDrag();
   if (!d?.moved) return; // a tap: the click handler takes it from here
   noClickUntil = Date.now() + 350;
-  if (d.over) { sel = null; act(d.over.option.action); }
+  if (d.over?.option.action) { sel = null; act(d.over.option.action); }
 }
 
 function dragCancel() { stopDrag(); }
@@ -1110,6 +1219,7 @@ function stopDrag() {
   drag.tip?.remove();
   drag.el.classList.remove('pv-drag-source');
   for (const t of drag.targets) t.el.classList.remove('pv-drop', 'pv-drop-over');
+  drag.spread?.classList.remove('pv-spread');
   document.body.classList.remove('pv-dragging');
   drag = null;
   if (renderWaiting) { renderWaiting = false; render(); }

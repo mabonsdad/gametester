@@ -75,6 +75,7 @@ ${S.draw !== false ? `     {"type":"draw"}                                      
      {"type":"move","card":"<your hand card id>","to":"${S.discardZone}"}      only when you are told to discard
      {"type":"endTurn"}                                       to stop before using all your actions
 ${S.arrange === 'auto' ? '' : `     {"type":"stack","cards":["<id>","<id>"]}                 FREE (not an action): stack your own unstacked cards that form a set
+     {"type":"arrange","zone":"${S.giveZone}","groups":[["<id>","<id>"],["<id>","<id>","<id>"]]}   FREE: regroup ALL your stacked sets in that zone (each group a whole set; cards left out become lone)
 `}  ],
   "winConfidence": 0-100,   // honest estimate that you will win the game from here
   "experience": "one sentence on how this turn felt from your seat (interesting choice? stuck? clever steal?)",

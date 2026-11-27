@@ -297,7 +297,7 @@ export function apply(project, st, action) {
   const a = action || {};
   const actor = a.actor || activePlayer(st).id;
   const who = player(st, actor)?.name || actor;
-  if (isSets(project) && st.hand && st.status === 'playing' && player(st, actor) && ['move', 'draw', 'swap', 'take', 'endTurn', 'stack', 'steal', 'retire'].includes(a.type)) {
+  if (isSets(project) && st.hand && st.status === 'playing' && player(st, actor) && ['move', 'draw', 'swap', 'take', 'endTurn', 'stack', 'arrange', 'steal', 'retire'].includes(a.type)) {
     setsApply(project, st, a, actor);
     return st;
   }
@@ -1332,6 +1332,23 @@ function stackProblem(project, st, pid, cards) {
   return null;
 }
 
+// Why pid cannot arrange zone zid's stacked sets as groups ([[uid...]...]), or null.
+// Cards left out of every group are lone; each group must be a whole set.
+function arrangeProblem(project, st, pid, zid, groups) {
+  const z = st.zones[zid];
+  if (!z) return 'Say which zone to arrange.';
+  if (z.owner !== pid) return 'You can only arrange your own sets.';
+  if (setsCfg(project).arrange !== 'manual' || !canStack(project, st, zid)) return `Sets in the ${zoneDef(project, z.defId)?.name || zid} are not arranged by hand.`;
+  if (!Array.isArray(groups) || groups.some((g) => !Array.isArray(g) || !g.length)) return 'Give the sets as lists of cards.';
+  const all = groups.flat();
+  if (new Set(all).size !== all.length) return 'A card can be in only one set.';
+  if (all.some((u) => !z.cards.includes(u))) return `Those cards are not all in your ${zoneDef(project, z.defId)?.name || 'zone'}.`;
+  const C = setsC(project);
+  const bad = groups.find((g) => !matchGroup(C, g.map((u) => st.cards[u].defId)));
+  if (bad) return `${bad.map((u) => cardName(project, st, u)).join(', ')} is not a set.`;
+  return null;
+}
+
 // Every scoring zone of a player, with tricks and points.
 export function setsBreakdown(project, st, pid) {
   const zones = scoreZones(project).map((s) => {
@@ -1455,6 +1472,21 @@ function setsApply(project, st, a, actor) {
     return;
   }
   if (H.retiring) throw new Error(`Move one of your sets to your ${zoneDef(project, S.captureZone)?.name || 'Night'} first.`);
+  if (a.type === 'arrange') {
+    // Free, like stacking: regroup your own stacked sets (stack them yourself).
+    const zid = resolveZone(st, a.zone, actor);
+    const why = arrangeProblem(project, st, actor, zid, a.groups);
+    if (why) throw new Error(why);
+    const before = zoneTricks(project, st, zid).stacks.map((g) => g.label);
+    st.stacks ||= {};
+    st.stacks[zid] = a.groups.map((g) => g.slice());
+    const after = zoneTricks(project, st, zid).stacks.map((g) => g.label);
+    const zname = zoneDef(project, st.zones[zid].defId)?.name || zid;
+    log(st, actor, 'arrange', `${who} rearranged their ${zname}: ${after.length ? after.join(', ') : 'no stacked sets'}${before.join() !== after.join() ? ` (was ${before.length ? before.join(', ') : 'none'})` : ''}.`,
+      { data: { zone: zid, groups: a.groups.map((g) => g.slice()) } });
+    setsRescore(project, st);
+    return;
+  }
   if (a.type === 'stack') {
     // Free: does not use an action, allowed at any point of your own turn.
     const why = stackProblem(project, st, actor, a.cards);
@@ -1566,8 +1598,15 @@ function setsApply(project, st, a, actor) {
     // "stack": true also stacks the trick this card completes.
     const stackAs = a.stack && canStack(project, st, to) && !autoArranged(project, st, to) ? bestTrickWith(setsC(project), before.lone.map((u) => st.cards[u].defId), c.defId) : null;
     placeCard(project, st, a.card, to);
+    if (a.groups) {
+      // Played straight into a chosen arrangement of the zone's stacked sets.
+      const why = arrangeProblem(project, st, actor, to, a.groups);
+      if (why) { placeCard(project, st, a.card, handZ); throw new Error(why); }
+      st.stacks ||= {};
+      st.stacks[to] = a.groups.map((g) => g.slice());
+    }
     let stacked = null;
-    if (stackAs) {
+    if (stackAs && !a.groups) {
       const pool = before.lone.slice();
       stacked = [a.card];
       const need = stackAs.defIds.slice();
@@ -1865,8 +1904,9 @@ function setsLegal(project, st, pid, out) {
 function checkSets(project, st, action, actor) {
   const S = setsCfg(project);
   const active = activePlayer(st);
-  if (['move', 'draw', 'swap', 'take', 'endTurn', 'stack', 'steal', 'retire'].includes(action.type) && actor !== active.id) return `It is ${active.name}'s turn, not ${player(st, actor).name}'s.`;
+  if (['move', 'draw', 'swap', 'take', 'endTurn', 'stack', 'arrange', 'steal', 'retire'].includes(action.type) && actor !== active.id) return `It is ${active.name}'s turn, not ${player(st, actor).name}'s.`;
   if (action.type === 'stack') return stackProblem(project, st, actor, action.cards);
+  if (action.type === 'arrange') return arrangeProblem(project, st, actor, resolveZone(st, action.zone, actor), action.groups);
   if (action.type === 'steal') return stealPlan(project, st, actor, action.cards, resolveZone(st, action.to, actor)).error || null;
   if (action.type === 'retire') return retireProblem(project, st, actor, action.cards);
   if (st.hand?.retiring && action.type !== 'counter') return `Move one of your sets to your ${zoneDef(project, setsCfg(project).captureZone)?.name || 'Night'} first.`;
