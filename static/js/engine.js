@@ -2031,9 +2031,10 @@ function setsBotChoice(project, st, pid, ctx = botContext(project)) {
   const options = (l, s) => {
     const seen = new Set();
     const d = (u) => s.cards[u]?.defId;
-    return l.options.filter((o) => kinds.includes(o.kind) && !o.stack).filter((o) => {
+    // Playing a card can also stack the set it completes (manual stacking): weigh both.
+    return l.options.filter((o) => kinds.includes(o.kind)).filter((o) => {
       const a = o.action;
-      const key = `${a.type}:${d(a.card)}:${d(a.with)}:${(a.cards || []).map(d).sort()}:${a.to || ''}`;
+      const key = `${a.type}:${d(a.card)}:${d(a.with)}:${(a.cards || []).map(d).sort()}:${a.to || ''}:${a.stack ? 1 : 0}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;

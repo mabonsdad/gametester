@@ -9,7 +9,7 @@
 import * as api from './api.js';
 import { isAI, randomBot } from './ai.js';
 import {
-  activePlayer, announcementRules, apply, automation, cardDef, cardEffects, checkAction, competitors, createGame,
+  activePlayer, announcementRules, apply, automation, canStack, cardDef, cardEffects, checkAction, competitors, createGame,
   describeAutomation, isAutomated, isSets, isShedding, isTricks, isVisibleTo, legalMoves, player, setsBreakdown, setsCfg, shedColours, shedTop,
   teamOf, zoneTricks,
 } from './engine.js';
@@ -18,7 +18,7 @@ import { finishTurn, rollAiCatch, takeAiTurn } from './turns.js';
 import { cardBack, cardFace, cardText, h, modal, toast } from './ui.js';
 import { showReloadBar, watchVersion } from './version.js';
 import { applyTheme, themeOf } from './themes.js';
-import { compileSets, isWildValue } from './sets.js';
+import { compileSets, isWildValue, matchGroup } from './sets.js';
 
 const app = document.getElementById('app');
 const HUMAN = 'p1';
@@ -55,6 +55,8 @@ let lastHandSeen = 0;
 let saveTimer = null;
 let saveFailed = false;
 let sel = null; // set-collection games: the hand card the player has picked up
+let selMarket = null; // ...or the face-up card they have tapped (arrows show where it can go)
+let stackSel = []; // 'stack them yourself': the lone cards chosen to stack together
 
 // "&fast=1" in the address shortens the pauses between AI moves (for testing).
 const SPEED = /(?:^|[#&])fast=1/.test(location.hash) ? 0.12 : 1;
@@ -177,7 +179,7 @@ function start() {
   } catch (e) {
     return message('This game cannot start yet', h('p', {}, e.message));
   }
-  bubbles = {}; feed = []; thinking = null; lastHandSeen = 0; saveFailed = false; sel = null;
+  bubbles = {}; feed = []; thinking = null; lastHandSeen = 0; saveFailed = false; sel = null; selMarket = null; stackSel = [];
   const picksText = Object.fromEntries((base.variants || []).map((v) => [v.label, v.choices[choices.picks[v.id] ?? v.default ?? 0]?.label]));
   session = {
     id: uid('v_'),
@@ -330,6 +332,8 @@ async function act(action) {
     return false;
   }
   sel = null;
+  selMarket = null;
+  stackSel = [];
   tele('move', { action: action.type, card: action.card ? cname(action.card) : undefined, to: action.to, ms: Date.now() - turnStartedAt });
   catchUp(from);
   save();
@@ -354,6 +358,10 @@ function continuePlay() {
 
 // ================================================================ human actions
 function playCard(u) {
+  if (selMarket) {
+    const o = takeOptions(selMarket).find((x) => st.zones[x.to]?.defId === 'hand');
+    if (o) return act(o.action);
+  }
   const lm = legalMoves(game, st, HUMAN);
   if (!lm) return freeFormMenu(u);
   if (lm.options) {
@@ -378,18 +386,49 @@ function playCard(u) {
   act({ type: 'move', card: u, to: lm.target });
 }
 
-// Set collection: take a face-up Day card into your hand, or straight to a zone.
-function takeMenu(u, options) {
-  if (options.length === 1) return act(options[0].action);
-  const d = cardDef(game, st, u);
-  const where = (o) => (st.zones[o.to]?.defId === 'hand' ? 'Take it into your hand' : `Play it straight to your ${zoneDef(game, st.zones[o.to].defId)?.name}${isFaceDownZone(o.to) ? ' (face down)' : ''}`);
-  const dlg = modal(`Take the ${d?.name || 'card'}`, h('div', { class: 'stack' },
-    h('div', { class: 'pv-menu-card' }, cardFace(d, { size: 150 })),
-    d ? h('p', { class: 'small' }, cardText(d)) : null,
-    options.map((o) => h('button', { class: 'btn', onclick: () => { dlg.close(); act(o.action); } }, where(o)))),
-  [{ label: 'Cancel' }]);
+// Set collection: the ways to take face-up card u (into the hand, or straight to a zone).
+const takeOptions = (u) => (myTurn() ? (legalMoves(game, st, HUMAN)?.options || []).filter((o) => o.kind === 'take' && o.with === u) : []);
+
+// A tapped face-up card: arrows from it to where it can go (each a drop target
+// that can also be tapped).
+function drawTakeArrows() {
+  document.getElementById('pv-arrows')?.remove();
+  if (!selMarket) return;
+  const from = app.querySelector(`.pv-role-market [data-card="${selMarket}"]`);
+  const targets = takeOptions(selMarket).map((o) => ({ o, el: app.querySelector(`[data-zone="${o.to}"]`) })).filter((t) => t.el);
+  if (!from || !targets.length) return;
+  const sx = window.scrollX; const sy = window.scrollY;
+  const W = document.documentElement.scrollWidth; const H = document.documentElement.scrollHeight;
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.id = 'pv-arrows';
+  svg.setAttribute('class', 'pv-arrows');
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  svg.innerHTML = '<defs><marker id="pv-arrowhead" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f2c14e"/></marker></defs>';
+  const a = from.getBoundingClientRect();
+  const x0 = a.left + a.width / 2 + sx; const y0 = a.bottom + sy - 6;
+  for (const t of targets) {
+    const b = t.el.getBoundingClientRect();
+    // Aim at the near edge of the target, towards its middle.
+    const tx = Math.max(b.left + 30, Math.min(b.right - 30, x0 - sx)) + sx;
+    const ty = b.top + sy + Math.min(40, b.height / 2);
+    const mx = (x0 + tx) / 2 + (tx > x0 ? -40 : tx < x0 ? 40 : 60); const my = (y0 + ty) / 2;
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', `M${x0},${y0} Q${mx},${my} ${tx},${ty}`);
+    path.setAttribute('class', 'pv-arrow');
+    path.setAttribute('marker-end', 'url(#pv-arrowhead)');
+    svg.append(path);
+    const label = document.createElementNS(ns, 'text');
+    label.setAttribute('x', (x0 + tx) / 2 + (tx >= x0 ? 14 : -14));
+    label.setAttribute('y', my);
+    label.setAttribute('text-anchor', tx >= x0 ? 'start' : 'end');
+    label.setAttribute('class', 'pv-arrow-label');
+    label.textContent = st.zones[t.o.to]?.defId === 'hand' ? 'Hand' : zoneDef(game, st.zones[t.o.to].defId)?.name || '';
+    svg.append(label);
+  }
+  document.body.append(svg);
 }
-const isFaceDownZone = (zid) => zoneDef(game, st.zones[zid]?.defId)?.faceUp === false;
+window.addEventListener('resize', () => { if (selMarket) drawTakeArrows(); });
 
 // Free-form games: the player chooses where the card goes.
 function freeFormMenu(u) {
@@ -419,6 +458,8 @@ function render() {
   if (drag) { renderWaiting = true; return; } // redraw when the drag ends
   const winners = st.result?.winners || [];
   if (feedOpen) feedSeen = feedTotal;
+  if (selMarket && (!myTurn() || !takeOptions(selMarket).length)) selMarket = null;
+  if (stackSel.length && (!myTurn() || stackSel.some((u) => st.cards[u]?.zone !== `${HUMAN}.${setsCfg(game).giveZone}`))) stackSel = [];
   app.replaceChildren(h('div', { class: `pv ${feedOpen ? 'feed-open' : ''}` },
     topBar(),
     h('div', { class: 'pv-main' },
@@ -427,6 +468,7 @@ function render() {
       myArea()),
     feedOpen ? feedPanel() : null,
     cheatOpen && isSets(game) ? cheatSheet() : null));
+  drawTakeArrows();
 }
 
 function topBar() {
@@ -463,15 +505,17 @@ function opponent(p, winners) {
   const fan = Math.min(n, 10);
   return h('div', { class: `pv-opp ${active ? 'turn' : ''} ${thinking === p.id ? 'thinking' : ''} ${partner ? 'partner' : ''}` },
     bubbles[p.id] ? h('div', { class: 'pv-bubble' }, bubbles[p.id]) : null,
-    h('div', { class: 'pv-avatar', style: { '--hue': (p.seat * 67) % 360 } }, avatars[p.id] || '🙂'),
-    h('div', { class: 'pv-opp-name' }, p.name, partner ? h('span', { class: 'muted small' }, ' (partner)') : null),
-    h('div', { class: 'pv-opp-hand', title: `${n} card${n === 1 ? '' : 's'}` },
-      Array.from({ length: fan }, (_, i) => h('span', {
-        class: `pv-mini ${game.cardBack.image ? 'art' : ''}`,
-        style: game.cardBack.image ? { '--i': i, '--n': fan, backgroundImage: `url("${String(game.cardBack.image).replace(/"/g, '%22')}")` } : { '--i': i, '--n': fan, background: game.cardBack.color },
-      })),
-      h('span', { class: 'pv-count' }, n)),
-    game.counters.length ? h('div', { class: 'pv-opp-score small' }, game.counters.map((c) => `${c.name} ${p.counters[c.id]}`).join(' · ')) : null,
+    h('div', { class: 'pv-opp-head' },
+      h('div', { class: 'pv-avatar', style: { '--hue': (p.seat * 67) % 360 } }, avatars[p.id] || '🙂'),
+      h('div', { class: 'pv-opp-id' },
+        h('div', { class: 'pv-opp-name' }, p.name, partner ? h('span', { class: 'muted small' }, ' (partner)') : null),
+        game.counters.length ? h('div', { class: 'pv-opp-score small' }, game.counters.map((c) => `${c.name} ${p.counters[c.id]}`).join(' · ')) : null),
+      h('div', { class: 'pv-opp-hand', title: `${n} card${n === 1 ? '' : 's'} in hand` },
+        Array.from({ length: fan }, (_, i) => h('span', {
+          class: `pv-mini ${game.cardBack.image ? 'art' : ''}`,
+          style: game.cardBack.image ? { '--i': i, '--n': fan, backgroundImage: `url("${String(game.cardBack.image).replace(/"/g, '%22')}")` } : { '--i': i, '--n': fan, background: game.cardBack.color },
+        })),
+        h('span', { class: 'pv-count' }, n))),
     chips.length ? h('div', { class: 'pv-chips' }, chips) : null,
     isSets(game) && st.hand ? stealButtons(p) : null,
     isSets(game) && st.hand ? oppSets(p) : null,
@@ -544,9 +588,19 @@ function trickGroups(zid, { compact = false } = {}) {
   const m = Number(cfg?.multiplier) || 1;
   const r = zoneTricks(game, st, zid);
   const own = z.owner === HUMAN;
+  // "Stack them yourself": on your turn, tap your own lone cards to choose a stack.
+  const choosing = own && myTurn() && !compact && setsCfg(game).arrange === 'manual' && canStack(game, st, zid);
   const card = (u) => {
     if (compact) return chipCard(u);
     const d = cardDef(game, st, u);
+    if (choosing && r.lone.includes(u) && d) {
+      const el = cardFace(d);
+      el.classList.add('pv-stackable');
+      if (stackSel.includes(u)) el.classList.add('pv-stack-pick');
+      el.title = `${cardText(d)}\n${stackSel.includes(u) ? 'Tap to leave it out of the stack' : 'Tap to add it to a stack'}`;
+      el.addEventListener('click', (e) => { e.stopPropagation(); stackSel = stackSel.includes(u) ? stackSel.filter((x) => x !== u) : [...stackSel, u]; sel = null; selMarket = null; render(); });
+      return el;
+    }
     const el = isVisibleTo(game, st, u, HUMAN) && d ? infoOnClick(cardFace(d), d) : cardBack(game);
     if (!st.cards[u].faceUp && own) el.classList.add('pv-facedown');
     return el;
@@ -566,7 +620,19 @@ function trickGroups(zid, { compact = false } = {}) {
     }),
     r.loose.length ? h('div', { class: `pv-tg loose ${cfg?.secret ? '' : 'risk'}` }, h('div', { class: 'pv-tg-cards' }, r.loose.map(card)),
       h('div', { class: 'pv-tg-label' }, cfg?.secret ? 'not in a set yet' : own ? 'lone - others can use these' : 'lone')) : null,
-    !z.cards.length ? h('div', { class: 'pv-empty' }, compact ? '-' : 'empty') : null);
+    !z.cards.length ? h('div', { class: 'pv-empty' }, compact ? '-' : 'empty') : null,
+    choosing && stackSel.length ? stackChooser() : null,
+    choosing && !stackSel.length && r.lone.length > 1 ? h('div', { class: 'pv-stack-help' }, 'Tap your lone cards to choose a set to stack.') : null);
+}
+
+// The cards chosen to stack: which set they make, and the button that stacks them.
+function stackChooser() {
+  const m = matchGroup(compileSets(game, setsCfg(game)), stackSel.map((u) => st.cards[u].defId));
+  const names = stackSel.map(cname).join(' + ');
+  return h('div', { class: 'pv-stack-chooser' },
+    h('span', {}, names, ': ', m ? h('b', {}, m.label) : h('i', {}, 'not a set (yet)')),
+    m ? h('button', { class: 'btn small primary', onclick: (e) => { e.stopPropagation(); act({ type: 'stack', cards: stackSel.slice() }); } }, `🔒 Stack the ${m.label}`) : null,
+    h('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); stackSel = []; render(); } }, 'Clear'));
 }
 
 // Every trick the human can take from this player right now: obvious buttons.
@@ -605,7 +671,7 @@ function oppSets(p) {
 }
 
 function mySets() {
-  const opts = selOptions();
+  const opts = selMarket ? takeOptions(selMarket).map((o) => ({ ...o, kind: 'play' })) : selOptions();
   return h('div', { class: 'pv-my-sets' }, setsCfg(game).zones.filter((z) => st.zones[`${HUMAN}.${z.zone}`]).map((z) => {
     const zid = `${HUMAN}.${z.zone}`;
     const o = opts.find((x) => x.kind === 'play' && x.to === zid);
@@ -659,8 +725,9 @@ function zoneView(zid) {
       if (o) { el.classList.add('pv-drawable'); el.title = `Swap your ${cname(sel)} for ${cname(u)}`; el.addEventListener('click', () => act(o.action)); }
       else if (t.length) {
         el.classList.add('pv-drawable', 'pv-draggable');
-        el.title = `${cname(u)}: ${dragHint(u, 'market')} (or tap it)`;
-        el.addEventListener('click', () => takeMenu(u, t));
+        el.title = `${cname(u)}: ${dragHint(u, 'market')}`;
+        if (selMarket === u) el.classList.add('picked');
+        el.addEventListener('click', () => { selMarket = selMarket === u ? null : u; sel = null; stackSel = []; render(); });
         el.addEventListener('pointerdown', (e) => startPress(e, u, 'market', el));
       }
       else if (myTurn() && swaps.length) el.title = 'To swap: tap a card in your hand, then tap this card';
@@ -743,6 +810,7 @@ function myArea() {
   const sets = isSets(game) && st.hand;
   const setZones = sets ? setsCfg(game).zones.map((z) => `${HUMAN}.${z.zone}`) : [];
   const others = st.zoneOrder.filter((z) => st.zones[z].owner === HUMAN && z !== handZ && z !== wonZone && !setZones.includes(z));
+  const handTake = selMarket ? takeOptions(selMarket).find((o) => o.to === handZ) : null;
   const actions = [];
   if (myTurn() && sets && lm?.options && lm.retiring) {
     for (const o of lm.options.filter((x) => x.kind === 'retire')) actions.push(h('button', { class: 'btn', onclick: () => act(o.action) }, `🌙 ${o.label}`));
@@ -750,8 +818,9 @@ function myArea() {
     if (!lm.discarding) {
       // Where a picked-up card can go is shown on the zones themselves (tap one, or drag the card there).
       if (sel) actions.push(h('button', { class: 'btn small', onclick: () => { sel = null; render(); } }, 'Put it back'));
+      if (selMarket) actions.push(h('button', { class: 'btn small', onclick: () => { selMarket = null; render(); } }, 'Leave it'));
       if (!sel && lm.canDraw) actions.push(h('button', { class: 'btn', onclick: () => act({ type: 'draw' }) }, `Draw from the ${st.zones[setsCfg(game).drawZone]?.name || 'pile'}`));
-      if (!sel) actions.push(h('button', { class: `btn ${lm.actionsLeft ? '' : 'primary'}`, onclick: () => act({ type: 'endTurn' }) }, lm.actionsLeft ? 'End turn early' : 'End turn'));
+      if (!sel && !selMarket) actions.push(h('button', { class: `btn ${lm.actionsLeft ? '' : 'primary'}`, onclick: () => act({ type: 'endTurn' }) }, lm.actionsLeft ? 'End turn early' : 'End turn'));
     }
   } else if (myTurn()) {
     if (lm?.canDraw && isShedding(game)) actions.push(h('button', { class: `btn ${lm.legal.length ? '' : 'primary'}`, onclick: () => act({ type: 'draw' }) }, lm.takeCount ? `Take ${lm.takeCount} cards` : 'Draw a card'));
@@ -766,7 +835,7 @@ function myArea() {
     actions.unshift(h('button', { class: 'btn catch-btn pv-catch', onclick: () => act({ type: 'catch' }) }, `Catch ${player(st, st.catchable.pid).name}! (didn't say "${st.catchable.label}")`));
   }
   const tip = st.status !== 'playing' ? '' : st.pending ? '' : myTurn()
-    ? (sets && lm?.options ? (lm.retiring ? lm.summary : lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: tap where it goes - one of your glowing zones${lm.options.some((o) => o.kind === 'give' && o.card === sel) ? ' or a glowing opponent' : ''}${lm.options.some((o) => o.kind === 'swap') ? ', or a face-up card to swap' : ''}.` : `${lm.summary} Drag cards to where they go (or tap them).${lm.canStack ? ' You have an unstacked set: tap 🔒 Stack to protect it (free).' : ''}${lm.options.some((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0) ? ' 🗡 You can take a set from another player - see the buttons on their panel.' : ''}`)
+    ? (sets && lm?.options ? (lm.retiring ? lm.summary : selMarket ? `${cname(selMarket)}: drag it along an arrow - or tap your ${takeOptions(selMarket).map((o) => (st.zones[o.to]?.defId === 'hand' ? 'hand' : zoneDef(game, st.zones[o.to].defId)?.name)).join(' or ')} - to take it. Tap it again to leave it.` : lm.discarding ? `${lm.summary} Tap the cards to discard.` : sel ? `${cname(sel)}: tap where it goes - one of your glowing zones${lm.options.some((o) => o.kind === 'give' && o.card === sel) ? ' or a glowing opponent' : ''}${lm.options.some((o) => o.kind === 'swap') ? ', or a face-up card to swap' : ''}.` : `${lm.summary} Drag cards to where they go (or tap them).${lm.canStack ? ' You have an unstacked set: tap 🔒 Stack to protect it (free).' : ''}${lm.options.some((o) => (o.kind === 'give' || o.kind === 'steal') && o.gain > 0) ? ' 🗡 You can take a set from another player - see the buttons on their panel.' : ''}`)
       : lm ? `${lm.summary}${lm.legal.length ? ' Tap a highlighted card to play it.' : ''}` : 'Tap a card to play it, or draw from a pile; then end your turn.')
     : 'Waiting for the other players…';
   const chips = [];
@@ -791,7 +860,11 @@ function myArea() {
       sel && st.cards[sel] ? pickedInfo(cardDef(game, st, sel)) : null,
       tip ? h('p', { class: 'pv-tip' }, tip) : null,
       actions.length ? h('div', { class: 'pv-actions' }, actions) : null),
-    h('div', { class: `pv-hand ${cards.length > 9 ? 'many' : ''}`, dataset: { zone: handZ } }, cards.map((u) => {
+    h('div', {
+      class: `pv-hand ${cards.length > 9 ? 'many' : ''} ${handTake ? 'pv-target' : ''}`, dataset: { zone: handZ }, style: { '--n': cards.length },
+      onclick: handTake ? (e) => { if (e.target === e.currentTarget) act(handTake.action); } : null,
+      title: handTake ? handTake.label : '',
+    }, cards.map((u) => {
       const d = cardDef(game, st, u);
       const el = cardFace(d);
       el.dataset.card = u;
